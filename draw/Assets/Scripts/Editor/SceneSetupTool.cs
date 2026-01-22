@@ -147,6 +147,9 @@ namespace Editor
         [MenuItem("Drawing/Update UI Only")]
         public static void UpdateUI()
         {
+            // 0. Ensure Assets are ready
+            SetupBrushAssets();
+
             Canvas canvas = Object.FindObjectOfType<Canvas>();
             Features.Drawing.App.DrawingAppService appService = Object.FindObjectOfType<Features.Drawing.App.DrawingAppService>();
             
@@ -167,9 +170,38 @@ namespace Editor
                         rect.offsetMin = new Vector2(0, NAV_HEIGHT);
                         rect.offsetMax = new Vector2(0, -TOP_BAR_HEIGHT);
                     }
+
+                    // --- RE-LINK REFERENCES (Fix for "Script Missing" aftermath) ---
+                    // 1. Re-link CanvasRenderer
+                    Features.Drawing.Presentation.CanvasRenderer renderer = boardObj.GetComponent<Features.Drawing.Presentation.CanvasRenderer>();
+                    if (renderer == null) renderer = boardObj.AddComponent<Features.Drawing.Presentation.CanvasRenderer>();
+                    
+                    RawImage rawImage = boardObj.GetComponent<RawImage>();
+                    Texture2D savedBrush = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/SoftBrush.png");
+                    Shader brushShader = Shader.Find("Drawing/BrushStamp");
+
+                    SerializedObject soRenderer = new SerializedObject(renderer);
+                    if (rawImage != null) soRenderer.FindProperty("_displayImage").objectReferenceValue = rawImage;
+                    if (savedBrush != null) soRenderer.FindProperty("_defaultBrushTip").objectReferenceValue = savedBrush;
+                    if (brushShader != null) soRenderer.FindProperty("_brushShader").objectReferenceValue = brushShader;
+                    soRenderer.ApplyModifiedProperties();
+
+                    // 2. Re-link MouseInputProvider
+                    MouseInputProvider input = boardObj.GetComponent<MouseInputProvider>();
+                    if (input == null) input = boardObj.AddComponent<MouseInputProvider>();
+                    
+                    SerializedObject soInput = new SerializedObject(input);
+                    soInput.FindProperty("_inputArea").objectReferenceValue = rect;
+                    soInput.FindProperty("_appService").objectReferenceValue = appService;
+                    soInput.ApplyModifiedProperties();
+
+                    // 3. Re-link AppService to Renderer
+                    SerializedObject soApp = new SerializedObject(appService);
+                    soApp.FindProperty("_concreteRenderer").objectReferenceValue = renderer;
+                    soApp.ApplyModifiedProperties();
                 }
 
-                Debug.Log("UI Updated Successfully (Large Mode).");
+                Debug.Log("UI Updated Successfully (Large Mode + References Re-linked).");
             }
             else
             {
@@ -282,9 +314,67 @@ namespace Editor
                 Object.DestroyImmediate(existing.gameObject);
             }
 
+            // 1. Ensure Prefab Exists
+            string prefabPath = "Assets/Resources/UI/DrawingHUD.prefab";
+            
+            // Ensure directory exists (handle recursive creation)
+            if (!AssetDatabase.IsValidFolder("Assets/Resources"))
+            {
+                AssetDatabase.CreateFolder("Assets", "Resources");
+            }
+            if (!AssetDatabase.IsValidFolder("Assets/Resources/UI"))
+            {
+                AssetDatabase.CreateFolder("Assets/Resources", "UI");
+            }
+            AssetDatabase.Refresh();
+
+            // Always regenerate the UI to ensure latest changes (TextMeshPro, layout, scripts) are applied
+            // and to fix any potential broken script references in the old prefab.
+            Debug.Log("Generating new UI Prefab...");
+            GameObject tempUI = GenerateUIHierarchy();
+            
+            // Save as Prefab
+            GameObject prefab = PrefabUtility.SaveAsPrefabAsset(tempUI, prefabPath);
+            Object.DestroyImmediate(tempUI);
+            
+            Debug.Log($"UI Prefab saved to {prefabPath}");
+
+            // 2. Instantiate Prefab
+            if (prefab != null)
+            {
+                GameObject instance = PrefabUtility.InstantiatePrefab(prefab) as GameObject;
+                if (instance != null)
+                {
+                    instance.name = "DrawingUI_Root";
+                    instance.transform.SetParent(canvas.transform, false);
+                    
+                    RectTransform rect = instance.GetComponent<RectTransform>();
+                    if (rect != null)
+                    {
+                        rect.anchorMin = Vector2.zero;
+                        rect.anchorMax = Vector2.one;
+                        rect.sizeDelta = Vector2.zero;
+                        rect.offsetMin = Vector2.zero;
+                        rect.offsetMax = Vector2.zero;
+                    }
+
+                    // 3. Link External References (Scene Dependencies)
+                    var toolbarScript = instance.GetComponent<Features.Drawing.Presentation.UI.DrawingToolbar>();
+                    if (toolbarScript != null)
+                    {
+                        SerializedObject so = new SerializedObject(toolbarScript);
+                        so.FindProperty("_appService").objectReferenceValue = appService;
+                        so.ApplyModifiedProperties();
+                    }
+                }
+            }
+        }
+
+        private static GameObject GenerateUIHierarchy()
+        {
             // Root Container
             GameObject root = new GameObject("DrawingUI_Root");
-            root.transform.SetParent(canvas.transform, false);
+            // root.transform.SetParent(canvas.transform, false); // Removed: Prefab generation doesn't need canvas parent
             RectTransform rootRect = root.AddComponent<RectTransform>();
             rootRect.anchorMin = Vector2.zero;
             rootRect.anchorMax = Vector2.one;
@@ -380,7 +470,8 @@ namespace Editor
             var toolbarScript = root.AddComponent<Features.Drawing.Presentation.UI.DrawingToolbar>();
             SerializedObject so = new SerializedObject(toolbarScript);
             
-            so.FindProperty("_appService").objectReferenceValue = appService;
+            // _appService is Scene Dependency, linked at runtime instantiation
+            // so.FindProperty("_appService").objectReferenceValue = appService; 
             
             so.FindProperty("_btnUndo").objectReferenceValue = btnUndo;
             so.FindProperty("_btnClear").objectReferenceValue = btnClear;
@@ -419,6 +510,8 @@ namespace Editor
             so.FindProperty("_pencilBrushStrategy").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Features.Drawing.Domain.BrushStrategy>(pencilPath);
 
             so.ApplyModifiedProperties();
+
+            return root;
         }
 
         private static GameObject CreateSubPanel(GameObject parent, string name)
