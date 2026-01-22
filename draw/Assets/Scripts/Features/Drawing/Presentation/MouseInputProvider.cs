@@ -80,8 +80,17 @@ namespace Features.Drawing.Presentation
 
             if (!isDown && !isUp && !isHeld) return;
             
+            // 1. Determine which Camera to use for coordinate conversion
+            Camera worldCam = null;
+            if (_inputArea.GetComponentInParent<Canvas>().renderMode != RenderMode.ScreenSpaceOverlay)
+            {
+                worldCam = _inputArea.GetComponentInParent<Canvas>().worldCamera;
+                // Fallback to Main Camera if canvas camera is missing
+                if (worldCam == null) worldCam = Camera.main;
+            }
+
             if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                _inputArea, screenPos, null, out Vector2 localPos))
+                _inputArea, screenPos, worldCam, out Vector2 localPos))
             {
                 return; 
             }
@@ -153,12 +162,17 @@ namespace Features.Drawing.Presentation
                 Transform hitTransform = hitObj.transform;
 
                 // 1. If we hit the input area (or its children), we are good to go!
+                // NOTE: When using Screen Space - Camera, RaycastAll might hit the plane differently
+                // but usually GraphicRaycaster handles it correctly.
                 if (hitTransform == inputTransform || hitTransform.IsChildOf(inputTransform))
                 {
                     return false; // Not blocked, we found the canvas!
                 }
 
                 // 2. If we hit something else, check if it's "interactive"
+                // IGNORE "Canvas" object itself if it has a graphic raycaster but no visual blocking
+                if (hitObj.name == "Canvas") continue;
+
                 bool isInteractive = hitObj.GetComponentInParent<UnityEngine.UI.Selectable>() != null;
                 
                 if (isInteractive)
@@ -166,9 +180,6 @@ namespace Features.Drawing.Presentation
                     return true; // Blocked by button/slider/etc.
                 }
             }
-
-            // If we are here, it means we hit some UI elements (like background images, text labels, containers),
-            // but NONE of them were "interactive" (buttons, etc.), and NONE of them were the InputArea.
             
             return false; 
         }

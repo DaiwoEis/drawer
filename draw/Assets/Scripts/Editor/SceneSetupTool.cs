@@ -43,6 +43,28 @@ namespace Editor
             
             RawImage rawImage = boardObj.AddComponent<RawImage>();
             rawImage.color = Color.white;
+            
+            // Fix: Assign custom material to handle Premultiplied Alpha correctly
+            Material uiMat = AssetDatabase.LoadAssetAtPath<Material>("Assets/UI_Premultiply_Fix.mat");
+            Shader premulShader = Shader.Find("UI/Premul");
+            
+            if (uiMat == null)
+            {
+                if (premulShader == null) premulShader = Shader.Find("UI/Default"); // Fallback
+                uiMat = new Material(premulShader);
+                AssetDatabase.CreateAsset(uiMat, "Assets/UI_Premultiply_Fix.mat");
+            }
+            else if (premulShader != null && uiMat.shader != premulShader)
+            {
+                 uiMat.shader = premulShader;
+                 EditorUtility.SetDirty(uiMat);
+            }
+            
+            if (uiMat != null)
+            {
+                rawImage.material = uiMat;
+            }
+            
             rawImage.raycastTarget = false; // Disable Raycast Target to allow input passthrough logic
             
             RectTransform rect = boardObj.GetComponent<RectTransform>();

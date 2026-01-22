@@ -72,6 +72,10 @@ namespace Features.Drawing.Presentation
 
             InitializeGraphics();
             UpdateStampGeneratorScaleIfNeeded();
+            
+            // Fix UI Premultiplied Alpha Issue
+            // Reverted: Changing RenderMode broke Input. Using Material Blend Mode fix instead.
+            // if (_displayImage != null) ...
         }
 
         private void OnRectTransformDimensionsChange()
