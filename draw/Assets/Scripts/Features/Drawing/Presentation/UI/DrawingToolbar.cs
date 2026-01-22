@@ -71,8 +71,7 @@ namespace Features.Drawing.Presentation.UI
 
             // Top Bar
             if (_btnClear) _btnClear.onClick.AddListener(OnClearClick);
-            // Undo not implemented yet, placeholder
-            if (_btnUndo) _btnUndo.onClick.AddListener(() => Debug.Log("Undo clicked"));
+            if (_btnUndo) _btnUndo.onClick.AddListener(OnUndoClick);
 
             // Tabs
             if (_tabBrush) _tabBrush.onClick.AddListener(() => SwitchTab(Tab.Brush));
@@ -136,27 +135,47 @@ namespace Features.Drawing.Presentation.UI
 
         private void SwitchTab(Tab tab)
         {
-            _activeTab = tab;
+            if (_activeTab == tab)
+            {
+                return;
+            }
 
-            // Logic Switch
-            if (tab == Tab.Brush)
-            {
-                _isEraserMode = false;
-                _appService.SetEraser(false);
-            }
-            else if (tab == Tab.Eraser)
-            {
-                _isEraserMode = true;
-                _appService.SetEraser(true);
-            }
-            // For Size and Color, we maintain the current tool mode (_isEraserMode)
-            
-            // UI Panel Visibility
-            if (_panelBrush) _panelBrush.SetActive(tab == Tab.Brush);
-            if (_panelSize) _panelSize.SetActive(tab == Tab.Size);
-            if (_panelColor) _panelColor.SetActive(tab == Tab.Color);
-            
+            _activeTab = tab;
             UpdateTabVisuals();
+
+            // Logic mapping
+            switch (tab)
+            {
+                case Tab.Brush:
+                    _isEraserMode = false;
+                    _appService.SetEraser(false);
+                    // Hide panels
+                    if (_panelSize) _panelSize.SetActive(false);
+                    if (_panelColor) _panelColor.SetActive(false);
+                    break;
+                case Tab.Eraser:
+                    _isEraserMode = true;
+                    _appService.SetEraser(true);
+                    // Hide panels
+                    if (_panelSize) _panelSize.SetActive(false);
+                    if (_panelColor) _panelColor.SetActive(false);
+                    break;
+                case Tab.Size:
+                    // Toggle Size Panel
+                    if (_panelSize) _panelSize.SetActive(true);
+                    if (_panelColor) _panelColor.SetActive(false);
+                    break;
+                case Tab.Color:
+                    // Toggle Color Panel
+                    if (_panelSize) _panelSize.SetActive(false);
+                    if (_panelColor) _panelColor.SetActive(true);
+                    break;
+                case Tab.None:
+                    // Hide all
+                    if (_panelSize) _panelSize.SetActive(false);
+                    if (_panelColor) _panelColor.SetActive(false);
+                    break;
+            }
         }
 
         private void UpdateTabVisuals()
@@ -208,60 +227,21 @@ namespace Features.Drawing.Presentation.UI
         private void OnClearClick()
         {
             _appService.ClearCanvas();
+            // TODO: Clear history in AppService if we want "Clear" to be undoable or just wipe everything?
+            // Usually Clear is a distinct action.
+            // If user wants to Undo Clear, we'd need to treat Clear as a Command.
+            // For now, Clear just wipes canvas.
+        }
+
+        private void OnUndoClick()
+        {
+            _appService.Undo();
         }
 
         private void SetSize(float size)
         {
             _appService.SetSize(size);
             Debug.Log($"Size set to: {size}");
-            
-            // If we are currently in Eraser mode (via Tab), SetSize(size) will update _lastEraserSize.
-            // But the user might be thinking "I want to change the BRUSH size", even if they are holding an eraser?
-            // "大小是改变笔刷大小的，不是橡皮擦" -> User implies Size panel ALWAYS controls Brush Size?
-            // OR user means: "When I click Size, I am changing the size of the *current tool*, but if I am in Eraser mode, 
-            // and I click size, it should NOT switch me to Eraser mode (fixed previously)".
-            
-            // Re-reading user input: "以及切换大小，笔刷大小没变问题，大小是改变笔刷大小的，不是橡皮擦"
-            // Translation: "Also switching size, brush size didn't change issue. Size is for changing brush size, NOT eraser."
-            
-            // Wait, does the user mean the Size Panel should ONLY affect the Brush, and NOT the Eraser?
-            // If so, even if I am in Eraser mode, clicking Size should update the *background* brush size, 
-            // and maybe switch me back to Brush mode? Or just update Brush size silently?
-            
-            // If user says "Size is for changing brush size, NOT eraser", it implies Eraser size might be fixed or handled differently.
-            // But standard drawing apps allow resizing eraser.
-            
-            // Let's assume the user wants: "When I pick a size, it applies to the BRUSH. If I was using Eraser, I probably want to switch back to Brush with this new size."
-            // OR "Eraser has its own size, but currently changing size while in Eraser mode accidentally changes Brush size (or vice versa)?"
-            
-            // Let's look at DrawingAppService.SetSize:
-            // if (_isEraser) { _lastEraserSize = size; } else { _lastBrushSize = size; }
-            
-            // If I am in Eraser mode, and I click Size 80. _lastEraserSize becomes 80. _lastBrushSize remains 10.
-            // Then I switch back to Brush. Brush size is 10.
-            // User complains: "Brush size didn't change".
-            
-            // Conclusion: The user expects the Size Panel to GLOBALLLY set the drawing size, 
-            // OR specifically they want to set the Brush Size, even if they are currently erasing.
-            
-            // Interpretation A: Size Panel = Brush Size. Eraser Size = Fixed or Separate.
-            // Interpretation B: Size Panel = Current Tool Size. (This is what I implemented).
-            
-            // Given "大小是改变笔刷大小的，不是橡皮擦" (Size is to change brush size, not eraser), 
-            // I strongly suspect Interpretation A: The user wants the Size buttons to ALWAYS update the Brush Size.
-            // And potentially, if they click a size, they expect to be using the Brush?
-            
-            // Let's modify DrawingAppService to allow setting Brush Size explicitly, or force SetSize to update Brush Size always.
-            
-            // But wait, if I am erasing, I might want a big eraser.
-            // If the Size panel ONLY affects Brush, how do I change Eraser size?
-            // Maybe Eraser is fixed? Or User doesn't care about Eraser size right now.
-            
-            // Let's try this: When setting size, we ALWAYS update the Brush Size.
-            // If we are in Eraser mode, we ALSO update Eraser size? Or just Brush?
-            
-            // "大小是改变笔刷大小的" -> "Size is for changing brush size".
-            // Let's force update _lastBrushSize in AppService, regardless of mode.
         }
 
         private void SetColor(Color c)

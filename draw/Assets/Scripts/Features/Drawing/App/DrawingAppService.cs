@@ -31,6 +31,21 @@ namespace Features.Drawing.App
         private List<LogicPoint> _smoothingOutputBuffer = new List<LogicPoint>(64);
         private List<LogicPoint> _singlePointBuffer = new List<LogicPoint>(1);
 
+        // History
+        [System.Serializable]
+        public class StrokeHistoryItem
+        {
+            public BrushStrategy Strategy;
+            public Texture2D RuntimeTexture;
+            public Color Color;
+            public float Size;
+            public bool IsEraser;
+            public List<LogicPoint> Points;
+        }
+        private List<StrokeHistoryItem> _history = new List<StrokeHistoryItem>();
+        private StrokeHistoryItem _currentHistoryItem;
+        private Texture2D _currentRuntimeTexture;
+
         // Events
         public event System.Action OnStrokeStarted;
 
@@ -56,6 +71,7 @@ namespace Features.Drawing.App
             if (strategy == null) return;
             
             _currentStrategy = strategy;
+            _currentRuntimeTexture = runtimeTexture; // Capture runtime texture
             _isEraser = false;
             _currentSize = _lastBrushSize; // Restore brush size
             
@@ -138,6 +154,7 @@ namespace Features.Drawing.App
 
         public void ClearCanvas()
         {
+            _history.Clear();
             _renderer?.ClearCanvas();
         }
 
@@ -149,6 +166,18 @@ namespace Features.Drawing.App
             OnStrokeStarted?.Invoke();
             
             _currentStrokeRaw.Clear();
+
+            // Create History Item
+            _currentHistoryItem = new StrokeHistoryItem
+            {
+                Strategy = _currentStrategy,
+                RuntimeTexture = _currentRuntimeTexture,
+                Color = _currentColor,
+                Size = _currentSize,
+                IsEraser = _isEraser,
+                Points = new List<LogicPoint>(1024)
+            };
+
             AddPoint(point);
         }
 
@@ -159,8 +188,113 @@ namespace Features.Drawing.App
 
         public void EndStroke()
         {
+            if (_currentHistoryItem != null)
+            {
+                // Capture all points from the raw buffer to history
+                // Note: We could have added them one by one in MoveStroke, but bulk copy is safer/easier
+                _currentHistoryItem.Points.AddRange(_currentStrokeRaw);
+                _history.Add(_currentHistoryItem);
+                _currentHistoryItem = null;
+            }
+
             _currentStrokeRaw.Clear();
             _renderer?.EndStroke();
+        }
+
+        public void Undo()
+        {
+            if (_history.Count == 0) return;
+
+            // Remove last stroke
+            _history.RemoveAt(_history.Count - 1);
+            
+            RedrawHistory();
+        }
+
+        private void RedrawHistory()
+        {
+            if (_renderer == null) return;
+
+            _renderer.ClearCanvas();
+
+            // Save current state to restore later (optional, but good UX)
+            var savedColor = _currentColor;
+            var savedSize = _currentSize;
+            var savedEraser = _isEraser;
+            var savedStrategy = _currentStrategy;
+            var savedRuntimeTex = _currentRuntimeTexture;
+            
+            foreach (var item in _history)
+            {
+                // Restore State for this stroke
+                if (item.IsEraser)
+                {
+                    _renderer.SetEraser(true);
+                    _renderer.SetBrushSize(item.Size);
+                }
+                else
+                {
+                    _renderer.ConfigureBrush(item.Strategy, item.RuntimeTexture);
+                    _renderer.SetEraser(false);
+                    _renderer.SetBrushColor(item.Color);
+                    _renderer.SetBrushSize(item.Size);
+                }
+
+                // Draw Points
+                DrawStrokePoints(item.Points);
+                
+                _renderer.EndStroke();
+            }
+
+            // Restore original state
+            if (savedEraser)
+            {
+                SetEraser(true);
+                // SetEraser sets size, so we might need to ensure correct size if logic changes
+                SetSize(savedSize); 
+            }
+            else
+            {
+                SetBrushStrategy(savedStrategy, savedRuntimeTex);
+                SetColor(savedColor);
+                SetSize(savedSize);
+            }
+        }
+
+        private void DrawStrokePoints(List<LogicPoint> points)
+        {
+            if (points == null || points.Count == 0) return;
+
+            // Replicate the logic from AddPoint, but iteratively
+            // We can't reuse AddPoint directly because it relies on _currentStrokeRaw state
+            
+            for (int i = 0; i < points.Count; i++)
+            {
+                // Logic matches AddPoint:
+                // If count < 4, draw point directly.
+                // If count >= 4, smooth last 4.
+                
+                // i is 0-based index. "Count" equivalent is i + 1.
+                int count = i + 1;
+                
+                if (count >= 4)
+                {
+                     _smoothingInputBuffer.Clear();
+                     _smoothingInputBuffer.Add(points[i - 3]);
+                     _smoothingInputBuffer.Add(points[i - 2]);
+                     _smoothingInputBuffer.Add(points[i - 1]);
+                     _smoothingInputBuffer.Add(points[i]);
+
+                     _smoothingService.SmoothPoints(_smoothingInputBuffer, _smoothingOutputBuffer);
+                     _renderer.DrawPoints(_smoothingOutputBuffer);
+                }
+                else
+                {
+                     _singlePointBuffer.Clear();
+                     _singlePointBuffer.Add(points[i]);
+                     _renderer.DrawPoints(_singlePointBuffer);
+                }
+            }
         }
 
         private void AddPoint(LogicPoint point)
