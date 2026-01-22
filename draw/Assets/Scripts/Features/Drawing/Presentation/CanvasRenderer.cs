@@ -45,6 +45,8 @@ namespace Features.Drawing.Presentation
 
         // Interpolation Logic Delegated to Generator
         private StrokeStampGenerator _stampGenerator = new StrokeStampGenerator();
+        private GpuStrokeStampGenerator _gpuStampGenerator;
+        private bool _useGpuStamping = true;
         private List<StampData> _stampBuffer = new List<StampData>(1024);
         
         // Cache for batching (optimization)
@@ -63,6 +65,19 @@ namespace Features.Drawing.Presentation
             {
                 Camera.main.backgroundColor = Color.white;
                 Camera.main.clearFlags = CameraClearFlags.SolidColor;
+            }
+
+            // Try load Compute Shader
+            var shader = Resources.Load<ComputeShader>("Shaders/StrokeGeneration");
+            if (shader != null)
+            {
+                _gpuStampGenerator = new GpuStrokeStampGenerator(shader);
+                Debug.Log("[CanvasRenderer] GPU Stroke Generation Enabled.");
+            }
+            else
+            {
+                Debug.LogWarning("[CanvasRenderer] Compute Shader not found in Resources/Shaders/StrokeGeneration. Falling back to CPU.");
+                _useGpuStamping = false;
             }
 
             if (_baseMaxDimension <= 0)
@@ -91,6 +106,7 @@ namespace Features.Drawing.Presentation
             if (_brushMaterial != null) Destroy(_brushMaterial);
             // Don't destroy _quadMesh if it's a primitive, but if we created it:
             if (_quadMesh != null) Destroy(_quadMesh);
+            if (_gpuStampGenerator != null) _gpuStampGenerator.Dispose();
         }
 
         private void InitializeGraphics()
@@ -158,6 +174,12 @@ namespace Features.Drawing.Presentation
 
             _stampGenerator.SetCanvasResolution(_resolution);
             _stampGenerator.SetSizeScale(sizeScale);
+
+            if (_useGpuStamping && _gpuStampGenerator != null)
+            {
+                _gpuStampGenerator.SetCanvasResolution(_resolution);
+                _gpuStampGenerator.SetSizeScale(sizeScale);
+            }
 
             _lastResolution = _resolution;
             _lastDisplayWidth = displayWidth;
@@ -364,6 +386,13 @@ namespace Features.Drawing.Presentation
             // Reset generator state
             _stampGenerator.Reset();
 
+            if (_useGpuStamping && _gpuStampGenerator != null)
+            {
+                _gpuStampGenerator.SpacingRatio = strategy.SpacingRatio;
+                _gpuStampGenerator.AngleJitter = strategy.AngleJitter;
+                _gpuStampGenerator.Reset();
+            }
+
             // 3. Blend Mode
             if (_brushMaterial != null)
             {
@@ -416,8 +445,43 @@ namespace Features.Drawing.Presentation
             _cmd.SetProjectionMatrix(Matrix4x4.Ortho(0, _resolution.x, 0, _resolution.y, -1, 1));
 
             // Generate stamps
-            _stampGenerator.ProcessPoints(points, _brushSize, _stampBuffer);
+            bool gpuSuccess = false;
+            // Heuristic: GPU overhead is not worth it for small batches (e.g. real-time drawing).
+            // Also, GPU implementation is stateless and doesn't handle distance accumulation across small batches well.
+            // So we only use GPU for large batch processing (e.g. redraw, history undo/redo).
+            int pointsCount = 0;
+            if (points is ICollection<LogicPoint> col) pointsCount = col.Count;
+            else { foreach(var _ in points) pointsCount++; }
+
+            bool shouldTryGpu = _useGpuStamping && _gpuStampGenerator != null && pointsCount > 10;
+
+            if (shouldTryGpu)
+            {
+                try
+                {
+                    _gpuStampGenerator.ProcessPoints(points, _brushSize, _stampBuffer);
+                    gpuSuccess = true;
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogError($"[CanvasRenderer] GPU Generation Failed: {e.Message}. Fallback to CPU.");
+                    _useGpuStamping = false; 
+                }
+            }
             
+            if (!gpuSuccess)
+            {
+                _stampGenerator.ProcessPoints(points, _brushSize, _stampBuffer);
+            }
+            
+            // Debug if empty
+            if (_stampBuffer.Count == 0 && points != null)
+            {
+                // Only log if we expected something (more than 1 point)
+                // int count = 0; foreach(var p in points) count++;
+                // if (count > 1) Debug.LogWarning("[CanvasRenderer] Zero stamps generated!");
+            }
+
             // Draw stamps
             foreach (var stamp in _stampBuffer)
             {
@@ -444,11 +508,13 @@ namespace Features.Drawing.Presentation
             
             // Reset state
             _stampGenerator.Reset();
+            if (_gpuStampGenerator != null) _gpuStampGenerator.Reset();
         }
 
         public void EndStroke()
         {
             _stampGenerator.Reset();
+            if (_gpuStampGenerator != null) _gpuStampGenerator.Reset();
         }
     }
 }

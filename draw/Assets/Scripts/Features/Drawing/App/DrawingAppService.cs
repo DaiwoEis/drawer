@@ -5,9 +5,16 @@ using Features.Drawing.Domain.Interface;
 using Features.Drawing.Domain.ValueObject;
 using Features.Drawing.Service;
 using Features.Drawing.Presentation; 
+using Features.Drawing.Domain.Algorithm;
+using Features.Drawing.Domain.Data;
+using Features.Drawing.Domain.Entity;
 
 namespace Features.Drawing.App
 {
+    /// <summary>
+    /// Facade service that coordinates input, domain logic, and rendering.
+    /// This is the main entry point for the drawing feature.
+    /// </summary>
     public class DrawingAppService : MonoBehaviour
     {
         [Header("References")]
@@ -45,6 +52,9 @@ namespace Features.Drawing.App
         private List<StrokeHistoryItem> _history = new List<StrokeHistoryItem>();
         private StrokeHistoryItem _currentHistoryItem;
         private Texture2D _currentRuntimeTexture;
+        private StrokeEntity _currentStroke;
+
+        private StrokeSpatialIndex _spatialIndex;
 
         // Events
         public event System.Action OnStrokeStarted;
@@ -62,6 +72,7 @@ namespace Features.Drawing.App
             }
             
             _smoothingService = new StrokeSmoothingService();
+            _spatialIndex = new StrokeSpatialIndex();
         }
 
         // --- State Management ---
@@ -167,6 +178,12 @@ namespace Features.Drawing.App
             
             _currentStrokeRaw.Clear();
 
+            // Create Domain Entity
+            uint id = (uint)Random.Range(0, int.MaxValue); // Simple random ID
+            uint seed = (uint)Random.Range(0, int.MaxValue);
+            uint colorInt = ColorToUInt(_currentColor);
+            _currentStroke = new StrokeEntity(id, 0, 0, seed, colorInt);
+
             // Create History Item
             _currentHistoryItem = new StrokeHistoryItem
             {
@@ -188,17 +205,34 @@ namespace Features.Drawing.App
 
         public void EndStroke()
         {
+            if (_currentStroke == null) return;
+            
+            _currentStroke.EndStroke();
+            _renderer.EndStroke();
+            
+            // Add to history
             if (_currentHistoryItem != null)
             {
-                // Capture all points from the raw buffer to history
-                // Note: We could have added them one by one in MoveStroke, but bulk copy is safer/easier
-                _currentHistoryItem.Points.AddRange(_currentStrokeRaw);
+                // Copy points from domain entity to history item
+                _currentHistoryItem.Points.AddRange(_currentStroke.Points);
                 _history.Add(_currentHistoryItem);
                 _currentHistoryItem = null;
             }
-
-            _currentStrokeRaw.Clear();
-            _renderer?.EndStroke();
+            
+            // Spatial Indexing
+            _spatialIndex.Insert(_currentStroke);
+            
+            // Serialization Check (Debug)
+            var bytes = StrokeSerializer.Serialize(_currentStroke);
+            Debug.Log($"[Stroke] Ended. ID: {_currentStroke.Id}, Points: {_currentStroke.Points.Count}, Bytes: {bytes.Length}. Avg: {bytes.Length / (float)_currentStroke.Points.Count:F2} b/point");
+            
+            // Limit history
+            if (_history.Count > 100)
+            {
+                _history.RemoveAt(0);
+            }
+            
+            _currentStroke = null;
         }
 
         public void Undo()
@@ -261,6 +295,12 @@ namespace Features.Drawing.App
             }
         }
 
+        private uint ColorToUInt(Color color)
+        {
+            Color32 c32 = color;
+            return (uint)((c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a);
+        }
+
         private void DrawStrokePoints(List<LogicPoint> points)
         {
             if (points == null || points.Count == 0) return;
@@ -305,6 +345,21 @@ namespace Features.Drawing.App
             }
 
             _currentStrokeRaw.Add(point);
+            
+            // Add to domain entity
+            if (_currentStroke != null)
+            {
+                // We add one by one here, which is slightly inefficient for list resizing, 
+                // but acceptable for drawing frequency.
+                // Or we can batch add in EndStroke? 
+                // No, EndStroke uses _currentStroke.Points, so we must add them.
+                // But wait, StrokeEntity.AddPoints takes IEnumerable.
+                // Let's create a single-item list or helper.
+                // Actually, let's just expose a way to add single point or optimize later.
+                // For now, let's just make a temp array.
+                _currentStroke.AddPoints(new LogicPoint[] { point });
+            }
+
             int count = _currentStrokeRaw.Count;
 
             if (count >= 4)

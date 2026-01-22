@@ -1,0 +1,108 @@
+#pragma kernel GenerateStamps
+
+struct LogicPoint {
+    float x;
+    float y;
+    float pressure;
+    float padding; // Alignment
+};
+
+struct StampData {
+    float2 position;
+    float size;
+    float rotation;
+};
+
+StructuredBuffer<LogicPoint> InputPoints;
+StructuredBuffer<float> PathDistances; // Cumulative distance at each point
+AppendStructuredBuffer<StampData> OutputStamps;
+
+float Spacing;
+float SizeScale;
+float BrushSize;
+float ScaleX;
+float ScaleY;
+int PointsCount;
+float AngleJitter;
+
+// Random function
+float rand(float2 co) {
+    return frac(sin(dot(co.xy, float2(12.9898, 78.233))) * 43758.5453);
+}
+
+[numthreads(64, 1, 1)]
+void GenerateStamps (uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= (uint)PointsCount - 1) return;
+
+    LogicPoint p1 = InputPoints[i];
+    LogicPoint p2 = InputPoints[i + 1];
+
+    float startDist = PathDistances[i];
+    float endDist = PathDistances[i + 1];
+    float segLen = endDist - startDist;
+
+    if (segLen <= 0.0001) return;
+
+    // Calculate how many stamps fall into this segment
+    // Global distance of first stamp: k * Spacing
+    // We want: startDist <= k * Spacing <= endDist
+    
+    // k >= startDist / Spacing  ->  k_min = ceil(startDist / Spacing)
+    // k <= endDist / Spacing    ->  k_max = floor(endDist / Spacing)
+    // Careful with float precision. 
+
+    float firstStampIdx = ceil(startDist / Spacing);
+    float lastStampIdx = floor(endDist / Spacing);
+
+    // Edge case: if startDist is exactly multiple of spacing, we might include it.
+    // But usually we want strict inequality for the start to avoid double stamping at joins?
+    // Let's assume standard behavior: include start if exactly on it, unless handled by previous segment.
+    // Previous segment (i-1) goes up to dists[i]. 
+    // If dists[i] is multiple of spacing, should (i-1) handle it or (i)?
+    // Usually standard is [start, end).
+    // Let's stick to simple logic:
+    // If `k * Spacing == endDist`, we DO NOT include it here (next segment starts there).
+    // So `k * Spacing < endDist`.
+    // `k_max = floor((endDist - epsilon) / Spacing)`
+    
+    float epsilon = 0.001;
+    float lastStampIdxCorrected = floor((endDist - epsilon) / Spacing);
+
+    for (float k = firstStampIdx; k <= lastStampIdxCorrected; k++)
+    {
+        float globalD = k * Spacing;
+        float t = (globalD - startDist) / segLen;
+        
+        // Interpolate
+        float2 pos1 = float2(p1.x * ScaleX, p1.y * ScaleY);
+        float2 pos2 = float2(p2.x * ScaleX, p2.y * ScaleY);
+        
+        float2 currentPos = lerp(pos1, pos2, t);
+        float currentPressure = lerp(p1.pressure, p2.pressure, t); // LogicPoint pressure is 0-1 (float)
+        
+        // Calculate Size
+        // LogicPoint pressure is 0-255 in struct, but we pass float 0-1 here?
+        // C# side will convert byte to float 0-1.
+        float currentSize = BrushSize * currentPressure * SizeScale;
+        
+        // Rotation (Fixed 0 for now, or calculate direction)
+        float rotation = 0;
+        // Direction based rotation?
+        // float2 dir = normalize(pos2 - pos1);
+        // rotation = atan2(dir.y, dir.x); 
+        // For now keep 0 or random jitter
+        
+        if (AngleJitter > 0) {
+            rotation += (rand(currentPos) - 0.5) * 2.0 * AngleJitter;
+        }
+
+        StampData s;
+        s.position = currentPos;
+        s.size = currentSize;
+        s.rotation = rotation;
+        
+        OutputStamps.Append(s);
+    }
+}

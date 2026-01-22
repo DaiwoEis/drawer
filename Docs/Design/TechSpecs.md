@@ -105,5 +105,4 @@ Assets/Scripts/Features/Drawing/
 
 1.  **四叉树空间索引 (QuadTree Spatial Indexing)**: 为了高效的“按笔画擦除”或“选择”操作，我们需要快速查找区域内的笔画。
 2.  **计算着色器 (Compute Shaders)**: 将 `StrokeStampGenerator` 逻辑移动到 Compute Shader 以实现大规模并行（每帧 10k+ 印章）。
-3.  **纹理图集 (Texture Atlas)**: 目前每个笔刷笔尖可能是一个单独的纹理。将它们合并到图集中可以减少状态切换。
-4.  **网络协议 (Network Protocol)**: 当前的 `LogicPoint` 结构已准备好进行二进制序列化。增量压缩方案可以进一步减少带宽。
+3.  **网络协议 (Network Protocol)**: 当前的 `LogicPoint` 结构已准备好进行二进制序列化。增量压缩方案可以进一步减少带宽。
