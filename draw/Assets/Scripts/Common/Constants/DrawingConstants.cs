@@ -1,0 +1,24 @@
+namespace Common.Constants
+{
+    /// <summary>
+    /// Global drawing constants ensuring cross-platform consistency.
+    /// </summary>
+    public static class DrawingConstants
+    {
+        /// <summary>
+        /// Logical canvas width (0-65535 space mapped to this aspect ratio if needed, 
+        /// but usually we treat 0-65535 as normalized 0.0-1.0 range internally).
+        /// </summary>
+        public const int LOGICAL_RESOLUTION = 65536;
+
+        /// <summary>
+        /// Maximum pressure value (byte).
+        /// </summary>
+        public const int MAX_PRESSURE = 255;
+        
+        /// <summary>
+        /// Default chunk size for network packets (points per packet).
+        /// </summary>
+        public const int POINTS_PER_PACKET = 16;
+    }
+}
