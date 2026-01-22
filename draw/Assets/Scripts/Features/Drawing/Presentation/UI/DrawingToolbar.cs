@@ -1,11 +1,15 @@
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 using Features.Drawing.App;
 using Features.Drawing.Domain;
 using Common.Utils;
 
 namespace Features.Drawing.Presentation.UI
 {
+    /// <summary>
+    /// Manages the Drawing UI Toolbar.
+    /// </summary>
     public class DrawingToolbar : MonoBehaviour
     {
         [Header("References")]
@@ -22,6 +26,7 @@ namespace Features.Drawing.Presentation.UI
         [SerializeField] private Button _tabColor;
 
         // Sub Panels
+        [SerializeField] private GameObject _panelContainer; // The background container for sub-panels
         [SerializeField] private GameObject _panelBrush; // Shows brush types
         [SerializeField] private GameObject _panelSize;  // Shows sizes
         [SerializeField] private GameObject _panelColor; // Shows colors
@@ -149,29 +154,40 @@ namespace Features.Drawing.Presentation.UI
                 case Tab.Brush:
                     _isEraserMode = false;
                     _appService.SetEraser(false);
-                    // Hide panels
+                    // Show Brush Panel
+                    if (_panelContainer) _panelContainer.SetActive(true);
+                    if (_panelBrush) _panelBrush.SetActive(true);
+                    // Hide other panels
                     if (_panelSize) _panelSize.SetActive(false);
                     if (_panelColor) _panelColor.SetActive(false);
                     break;
                 case Tab.Eraser:
                     _isEraserMode = true;
                     _appService.SetEraser(true);
-                    // Hide panels
+                    // Hide all panels
+                    if (_panelContainer) _panelContainer.SetActive(false);
+                    if (_panelBrush) _panelBrush.SetActive(false);
                     if (_panelSize) _panelSize.SetActive(false);
                     if (_panelColor) _panelColor.SetActive(false);
                     break;
                 case Tab.Size:
                     // Toggle Size Panel
+                    if (_panelContainer) _panelContainer.SetActive(true);
+                    if (_panelBrush) _panelBrush.SetActive(false);
                     if (_panelSize) _panelSize.SetActive(true);
                     if (_panelColor) _panelColor.SetActive(false);
                     break;
                 case Tab.Color:
                     // Toggle Color Panel
+                    if (_panelContainer) _panelContainer.SetActive(true);
+                    if (_panelBrush) _panelBrush.SetActive(false);
                     if (_panelSize) _panelSize.SetActive(false);
                     if (_panelColor) _panelColor.SetActive(true);
                     break;
                 case Tab.None:
                     // Hide all
+                    if (_panelContainer) _panelContainer.SetActive(false);
+                    if (_panelBrush) _panelBrush.SetActive(false);
                     if (_panelSize) _panelSize.SetActive(false);
                     if (_panelColor) _panelColor.SetActive(false);
                     break;
@@ -216,7 +232,7 @@ namespace Features.Drawing.Presentation.UI
             Transform label = btn.transform.Find("Label");
             if (label != null)
             {
-                Text txt = label.GetComponent<Text>();
+                TextMeshProUGUI txt = label.GetComponent<TextMeshProUGUI>();
                 if (txt != null)
                 {
                     txt.color = isActive ? Color.black : Color.gray;

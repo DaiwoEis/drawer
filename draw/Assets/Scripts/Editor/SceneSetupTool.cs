@@ -3,6 +3,7 @@ using UnityEditor;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using UnityEngine.Rendering;
+using TMPro;
 using Features.Drawing.Presentation;
 using Features.Drawing.Domain;
 
@@ -10,6 +11,10 @@ namespace Editor
 {
     public class SceneSetupTool
     {
+        private const float NAV_HEIGHT = 220f; // Much taller
+        private const float PANEL_HEIGHT = 180f; // Taller panels
+        private const float TOP_BAR_HEIGHT = 100f;
+
         [MenuItem("Drawing/Setup Scene (One Click)")]
         public static void SetupScene()
         {
@@ -36,60 +41,84 @@ namespace Editor
                 canvasObj.AddComponent<GraphicRaycaster>();
                 Undo.RegisterCreatedObjectUndo(canvasObj, "Create Canvas");
             }
+            
+            // Ensure Scaler is configured for High DPI
+            ConfigureCanvasScaler(canvas);
 
             // 3. Create Drawing Board (RawImage)
-            GameObject boardObj = new GameObject("DrawingBoard");
-            boardObj.transform.SetParent(canvas.transform, false);
+            GameObject boardObj = GameObject.Find("DrawingBoard");
+            RawImage rawImage = null;
+            RectTransform rect = null;
             
-            RawImage rawImage = boardObj.AddComponent<RawImage>();
-            rawImage.color = Color.white;
-            
-            // Fix: Assign custom material to handle Premultiplied Alpha correctly
-            Material uiMat = AssetDatabase.LoadAssetAtPath<Material>("Assets/UI_Premultiply_Fix.mat");
-            Shader premulShader = Shader.Find("UI/Premul");
-            
-            if (uiMat == null)
+            if (boardObj == null)
             {
-                if (premulShader == null) premulShader = Shader.Find("UI/Default"); // Fallback
-                uiMat = new Material(premulShader);
-                AssetDatabase.CreateAsset(uiMat, "Assets/UI_Premultiply_Fix.mat");
+                boardObj = new GameObject("DrawingBoard");
+                boardObj.transform.SetParent(canvas.transform, false);
+                
+                rawImage = boardObj.AddComponent<RawImage>();
+                rawImage.color = Color.white;
+                
+                // Fix: Assign custom material to handle Premultiplied Alpha correctly
+                Material uiMat = AssetDatabase.LoadAssetAtPath<Material>("Assets/UI_Premultiply_Fix.mat");
+                Shader premulShader = Shader.Find("UI/Premul");
+                
+                if (uiMat == null)
+                {
+                    if (premulShader == null) premulShader = Shader.Find("UI/Default"); // Fallback
+                    uiMat = new Material(premulShader);
+                    AssetDatabase.CreateAsset(uiMat, "Assets/UI_Premultiply_Fix.mat");
+                }
+                else if (premulShader != null && uiMat.shader != premulShader)
+                {
+                     uiMat.shader = premulShader;
+                     EditorUtility.SetDirty(uiMat);
+                }
+                
+                if (uiMat != null)
+                {
+                    rawImage.material = uiMat;
+                }
+                
+                rawImage.raycastTarget = false; // Disable Raycast Target to allow input passthrough logic
+                
+                rect = boardObj.GetComponent<RectTransform>();
+                rect.anchorMin = Vector2.zero;
+                rect.anchorMax = Vector2.one;
+                rect.sizeDelta = Vector2.zero;
+                
+                Undo.RegisterCreatedObjectUndo(boardObj, "Create DrawingBoard");
             }
-            else if (premulShader != null && uiMat.shader != premulShader)
+            else
             {
-                 uiMat.shader = premulShader;
-                 EditorUtility.SetDirty(uiMat);
+                rawImage = boardObj.GetComponent<RawImage>();
+                rect = boardObj.GetComponent<RectTransform>();
             }
-            
-            if (uiMat != null)
-            {
-                rawImage.material = uiMat;
-            }
-            
-            rawImage.raycastTarget = false; // Disable Raycast Target to allow input passthrough logic
-            
-            RectTransform rect = boardObj.GetComponent<RectTransform>();
-            rect.anchorMin = Vector2.zero;
-            rect.anchorMax = Vector2.one;
-            rect.sizeDelta = Vector2.zero;
-            
-            Undo.RegisterCreatedObjectUndo(boardObj, "Create DrawingBoard");
 
-            // 4. Add Scripts
-            Features.Drawing.Presentation.CanvasRenderer renderer = boardObj.AddComponent<Features.Drawing.Presentation.CanvasRenderer>();
+            // ADJUST LAYOUT: Reserve space for Bottom Toolbar
+            rect.offsetMin = new Vector2(0, NAV_HEIGHT); // Bottom offset
+            rect.offsetMax = new Vector2(0, -TOP_BAR_HEIGHT); // Top offset (optional, but good for symmetry/safe area)
+
+            // 4. Add Scripts (Ensure they exist)
+            Features.Drawing.Presentation.CanvasRenderer renderer = boardObj.GetComponent<Features.Drawing.Presentation.CanvasRenderer>();
+            if (renderer == null) renderer = boardObj.AddComponent<Features.Drawing.Presentation.CanvasRenderer>();
             
-            MouseInputProvider input = boardObj.AddComponent<MouseInputProvider>();
+            MouseInputProvider input = boardObj.GetComponent<MouseInputProvider>();
+            if (input == null) input = boardObj.AddComponent<MouseInputProvider>();
 
             // 5. Create App Service (Application Layer)
-            GameObject appObj = new GameObject("DrawingAppService");
-            var appService = appObj.AddComponent<Features.Drawing.App.DrawingAppService>();
+            Features.Drawing.App.DrawingAppService appService = Object.FindObjectOfType<Features.Drawing.App.DrawingAppService>();
+            if (appService == null)
+            {
+                GameObject appObj = new GameObject("DrawingAppService");
+                appService = appObj.AddComponent<Features.Drawing.App.DrawingAppService>();
+                Undo.RegisterCreatedObjectUndo(appObj, "Create AppService");
+            }
             
             SerializedObject soApp = new SerializedObject(appService);
             soApp.FindProperty("_concreteRenderer").objectReferenceValue = renderer;
             soApp.ApplyModifiedProperties();
 
-            Undo.RegisterCreatedObjectUndo(appObj, "Create AppService");
-
-            // 6. Create Toolbar UI
+            // 6. Create Toolbar UI (Clean recreate)
             CreateToolbarUI(canvas, appService);
 
             // 7. Setup References
@@ -112,7 +141,52 @@ namespace Editor
             // 8. Select the object
             Selection.activeGameObject = boardObj;
             
-            Debug.Log("Scene Setup Complete! Click 'Play' to test.");
+            Debug.Log("Scene Setup Complete! UI Updated and Canvas Resized.");
+        }
+
+        [MenuItem("Drawing/Update UI Only")]
+        public static void UpdateUI()
+        {
+            Canvas canvas = Object.FindObjectOfType<Canvas>();
+            Features.Drawing.App.DrawingAppService appService = Object.FindObjectOfType<Features.Drawing.App.DrawingAppService>();
+            
+            if (canvas != null && appService != null)
+            {
+                // Ensure Scaler is configured
+                ConfigureCanvasScaler(canvas);
+
+                CreateToolbarUI(canvas, appService);
+                
+                // Also update Canvas rect
+                GameObject boardObj = GameObject.Find("DrawingBoard");
+                if (boardObj != null)
+                {
+                    RectTransform rect = boardObj.GetComponent<RectTransform>();
+                    if (rect != null)
+                    {
+                        rect.offsetMin = new Vector2(0, NAV_HEIGHT);
+                        rect.offsetMax = new Vector2(0, -TOP_BAR_HEIGHT);
+                    }
+                }
+
+                Debug.Log("UI Updated Successfully (Large Mode).");
+            }
+            else
+            {
+                Debug.LogError("Canvas or AppService not found!");
+            }
+        }
+
+        private static void ConfigureCanvasScaler(Canvas canvas)
+        {
+            if (canvas == null) return;
+            CanvasScaler scaler = canvas.GetComponent<CanvasScaler>();
+            if (scaler == null) scaler = canvas.gameObject.AddComponent<CanvasScaler>();
+
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1080, 1920);
+            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            scaler.matchWidthOrHeight = 0.5f;
         }
 
         private static void SetupBrushAssets()
@@ -201,6 +275,13 @@ namespace Editor
 
         private static void CreateToolbarUI(Canvas canvas, Features.Drawing.App.DrawingAppService appService)
         {
+            // Clean up existing
+            Transform existing = canvas.transform.Find("DrawingUI_Root");
+            if (existing != null)
+            {
+                Object.DestroyImmediate(existing.gameObject);
+            }
+
             // Root Container
             GameObject root = new GameObject("DrawingUI_Root");
             root.transform.SetParent(canvas.transform, false);
@@ -216,17 +297,17 @@ namespace Editor
             topRect.anchorMin = new Vector2(0, 1);
             topRect.anchorMax = new Vector2(1, 1);
             topRect.pivot = new Vector2(0.5f, 1);
-            topRect.sizeDelta = new Vector2(0, 60);
+            topRect.sizeDelta = new Vector2(0, TOP_BAR_HEIGHT);
             topRect.anchoredPosition = Vector2.zero;
 
             // Top Buttons Container (Right Aligned)
             HorizontalLayoutGroup topLayout = topBar.AddComponent<HorizontalLayoutGroup>();
             topLayout.childAlignment = TextAnchor.MiddleRight;
             topLayout.padding = new RectOffset(20, 20, 10, 10);
-            topLayout.spacing = 20;
+            topLayout.spacing = 30;
 
-            var btnUndo = CreateTextBtn(topBar, "Btn_Undo", "撤销");
-            var btnClear = CreateTextBtn(topBar, "Btn_Clear", "清屏");
+            var btnUndo = CreateTextBtn(topBar, "Btn_Undo", "Undo");
+            var btnClear = CreateTextBtn(topBar, "Btn_Clear", "Clear");
 
             // --- Sub Panels Container (Above Bottom Bar) ---
             GameObject panelContainer = new GameObject("PanelContainer");
@@ -235,17 +316,17 @@ namespace Editor
             panelRect.anchorMin = new Vector2(0, 0);
             panelRect.anchorMax = new Vector2(1, 0);
             panelRect.pivot = new Vector2(0.5f, 0);
-            panelRect.anchoredPosition = new Vector2(0, 80); // Above nav bar
-            panelRect.sizeDelta = new Vector2(0, 100); 
+            panelRect.anchoredPosition = new Vector2(0, NAV_HEIGHT); // Above taller nav bar
+            panelRect.sizeDelta = new Vector2(0, PANEL_HEIGHT); 
 
             Image panelBg = panelContainer.AddComponent<Image>();
-            panelBg.color = new Color(1, 1, 1, 0.9f); // Semi-transparent white bg for panels
+            panelBg.color = new Color(1, 1, 1, 0.95f); // Almost opaque
 
             // 1. Brush Panel
             GameObject brushPanel = CreateSubPanel(panelContainer, "BrushPanel");
             HorizontalLayoutGroup brushLayout = brushPanel.AddComponent<HorizontalLayoutGroup>();
             brushLayout.childAlignment = TextAnchor.MiddleCenter;
-            brushLayout.spacing = 30;
+            brushLayout.spacing = 50;
             
             Button btnSoft = CreateIconBtn(brushPanel, "Type_Soft", Color.gray, "Soft");
             Button btnHard = CreateIconBtn(brushPanel, "Type_Hard", Color.black, "Hard");
@@ -256,20 +337,20 @@ namespace Editor
             GameObject sizePanel = CreateSubPanel(panelContainer, "SizePanel");
             HorizontalLayoutGroup sizeLayout = sizePanel.AddComponent<HorizontalLayoutGroup>();
             sizeLayout.childAlignment = TextAnchor.MiddleCenter;
-            sizeLayout.spacing = 40;
+            sizeLayout.spacing = 60;
             
             Button[] sizeBtns = new Button[5];
-            for(int i=0; i<5; i++) sizeBtns[i] = CreateDotBtn(sizePanel, $"Size_{i}", 20 + i*15, Color.black);
+            for(int i=0; i<5; i++) sizeBtns[i] = CreateDotBtn(sizePanel, $"Size_{i}", 30 + i*20, Color.black);
 
             // 3. Color Panel
             GameObject colorPanel = CreateSubPanel(panelContainer, "ColorPanel");
             HorizontalLayoutGroup colorLayout = colorPanel.AddComponent<HorizontalLayoutGroup>();
             colorLayout.childAlignment = TextAnchor.MiddleCenter;
-            colorLayout.spacing = 20;
+            colorLayout.spacing = 30;
             
             Color[] palette = { Color.black, Color.red, new Color(1f, 0.8f, 0f), new Color(0.2f, 1f, 0.2f), new Color(0f, 0.8f, 1f), Color.blue, new Color(0.6f, 0f, 1f), new Color(1f, 0f, 0.5f) };
             Button[] colorBtns = new Button[palette.Length];
-            for(int i=0; i<palette.Length; i++) colorBtns[i] = CreateDotBtn(colorPanel, $"Col_{i}", 40, palette[i]);
+            for(int i=0; i<palette.Length; i++) colorBtns[i] = CreateDotBtn(colorPanel, $"Col_{i}", 80, palette[i]);
 
             // --- Bottom Navigation Bar ---
             GameObject navBar = new GameObject("NavBar");
@@ -278,20 +359,22 @@ namespace Editor
             navRect.anchorMin = new Vector2(0, 0);
             navRect.anchorMax = new Vector2(1, 0);
             navRect.pivot = new Vector2(0.5f, 0);
-            navRect.sizeDelta = new Vector2(0, 80); // Height
+            navRect.sizeDelta = new Vector2(0, NAV_HEIGHT); // Height increased
 
             Image navBg = navBar.AddComponent<Image>();
             navBg.color = new Color(0.95f, 0.95f, 0.95f, 1f);
-
+            
+            // Add shadow/border to top of navbar if possible, or just simple color
+            
             HorizontalLayoutGroup navLayout = navBar.AddComponent<HorizontalLayoutGroup>();
             navLayout.childControlWidth = true;
             navLayout.childForceExpandWidth = true;
-            navLayout.padding = new RectOffset(10, 10, 5, 5);
+            navLayout.padding = new RectOffset(20, 20, 10, 10);
             
-            var tabBrush = CreateNavTab(navBar, "Tab_Brush", "笔刷");
-            var tabEraser = CreateNavTab(navBar, "Tab_Eraser", "橡皮");
-            var tabSize = CreateNavTab(navBar, "Tab_Size", "大小");
-            var tabColor = CreateNavTab(navBar, "Tab_Color", "颜色");
+            var tabBrush = CreateNavTab(navBar, "Tab_Brush", "Brush");
+            var tabEraser = CreateNavTab(navBar, "Tab_Eraser", "Eraser");
+            var tabSize = CreateNavTab(navBar, "Tab_Size", "Size");
+            var tabColor = CreateNavTab(navBar, "Tab_Color", "Color");
 
             // --- Connect Script ---
             var toolbarScript = root.AddComponent<Features.Drawing.Presentation.UI.DrawingToolbar>();
@@ -307,6 +390,7 @@ namespace Editor
             so.FindProperty("_tabSize").objectReferenceValue = tabSize;
             so.FindProperty("_tabColor").objectReferenceValue = tabColor;
 
+            so.FindProperty("_panelContainer").objectReferenceValue = panelContainer;
             so.FindProperty("_panelBrush").objectReferenceValue = brushPanel;
             so.FindProperty("_panelSize").objectReferenceValue = sizePanel;
             so.FindProperty("_panelColor").objectReferenceValue = colorPanel;
@@ -352,6 +436,23 @@ namespace Editor
             return panel;
         }
 
+        private static TMP_FontAsset GetTMPFont()
+        {
+            // Try loading default TMP font
+            var font = Resources.Load<TMP_FontAsset>("Fonts & Materials/LiberationSans SDF");
+            if (font == null)
+            {
+                // Fallback: Try finding any TMP font in the project
+                string[] guids = AssetDatabase.FindAssets("t:TMP_FontAsset");
+                if (guids.Length > 0)
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                    font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(path);
+                }
+            }
+            return font;
+        }
+
         private static Button CreateNavTab(GameObject parent, string name, string text)
         {
             GameObject btnObj = new GameObject(name);
@@ -366,8 +467,8 @@ namespace Editor
             GameObject iconObj = new GameObject("Icon");
             iconObj.transform.SetParent(btnObj.transform, false);
             RectTransform iconRect = iconObj.AddComponent<RectTransform>();
-            iconRect.sizeDelta = new Vector2(30, 30);
-            iconRect.anchoredPosition = new Vector2(0, 10);
+            iconRect.sizeDelta = new Vector2(80, 80); // Bigger Icon
+            iconRect.anchoredPosition = new Vector2(0, 20);
             
             Image iconImg = iconObj.AddComponent<Image>();
             iconImg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Knob.psd");
@@ -377,15 +478,16 @@ namespace Editor
             GameObject label = new GameObject("Label");
             label.transform.SetParent(btnObj.transform, false);
             RectTransform lRect = label.AddComponent<RectTransform>();
-            lRect.sizeDelta = new Vector2(100, 20);
-            lRect.anchoredPosition = new Vector2(0, -15);
+            lRect.sizeDelta = new Vector2(150, 60); // Increased height to prevent clipping
+            lRect.anchoredPosition = new Vector2(0, -40);
             
-            Text txt = label.AddComponent<Text>();
+            TextMeshProUGUI txt = label.AddComponent<TextMeshProUGUI>();
             txt.text = text;
-            txt.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            txt.font = GetTMPFont();
             txt.color = Color.black;
-            txt.alignment = TextAnchor.MiddleCenter;
-            txt.fontSize = 12;
+            txt.alignment = TextAlignmentOptions.Center;
+            txt.overflowMode = TextOverflowModes.Overflow; // Ensure text shows even if bounds are tight
+            txt.fontSize = 36; // Bigger Text (was 24)
 
             return btn;
         }
@@ -396,7 +498,7 @@ namespace Editor
             btnObj.transform.SetParent(parent.transform, false);
             
             RectTransform rect = btnObj.AddComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(60, 60);
+            rect.sizeDelta = new Vector2(120, 120); // Bigger Button (was 100)
 
             Image img = btnObj.AddComponent<Image>();
             img.color = new Color(0.9f, 0.9f, 0.9f); // Bg
@@ -409,13 +511,15 @@ namespace Editor
             RectTransform labelRect = label.AddComponent<RectTransform>();
             labelRect.anchorMin = Vector2.zero;
             labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero; // Ensure it stretches
             
-            Text txt = label.AddComponent<Text>();
+            TextMeshProUGUI txt = label.AddComponent<TextMeshProUGUI>();
             txt.text = text;
-            txt.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            txt.font = GetTMPFont();
             txt.color = Color.black;
-            txt.alignment = TextAnchor.MiddleCenter;
-            txt.fontSize = 10;
+            txt.alignment = TextAlignmentOptions.Center;
+            txt.fontSize = 28; // Bigger Text (was 18)
             
             return btn;
         }
@@ -426,7 +530,7 @@ namespace Editor
             btnObj.transform.SetParent(parent.transform, false);
             
             RectTransform rect = btnObj.AddComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(50, 50); // Touch target
+            rect.sizeDelta = new Vector2(100, 100); // Touch target
 
             Button btn = btnObj.AddComponent<Button>();
 
@@ -448,7 +552,7 @@ namespace Editor
             GameObject btnObj = new GameObject(name);
             btnObj.transform.SetParent(parent.transform, false);
             RectTransform rect = btnObj.AddComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(80, 40);
+            rect.sizeDelta = new Vector2(120, 60); // Bigger Top Buttons
             
             Image bg = btnObj.AddComponent<Image>();
             bg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/UISprite.psd");
@@ -462,13 +566,15 @@ namespace Editor
             RectTransform lRect = label.AddComponent<RectTransform>();
             lRect.anchorMin = Vector2.zero;
             lRect.anchorMax = Vector2.one;
+            lRect.offsetMin = Vector2.zero;
+            lRect.offsetMax = Vector2.zero; // Ensure it stretches
             
-            Text txt = label.AddComponent<Text>();
+            TextMeshProUGUI txt = label.AddComponent<TextMeshProUGUI>();
             txt.text = text;
-            txt.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            txt.font = GetTMPFont();
             txt.color = Color.black;
-            txt.alignment = TextAnchor.MiddleCenter;
-            txt.fontSize = 14;
+            txt.alignment = TextAlignmentOptions.Center;
+            txt.fontSize = 20;
             
             return btn;
         }
