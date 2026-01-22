@@ -1,95 +1,109 @@
-# 技术方案：高性能跨端实时画板 (Unity)
+# 架构与技术深度解析
 
-## 1. 核心优化思路
+本文档详细介绍了高性能画板背后的内部架构、算法和技术决策。旨在供核心开发人员和希望扩展渲染或数据层的人员参考。
 
-针对 "Apple Notes 般丝滑" 与 "跨端一致" 的需求，在原 PRD 基础上进行以下技术深化与优化。
+## 1. 核心设计理念
 
-### 1.1 渲染层：Mesh Stamping + GPU 加速
-原 PRD 提到的 "RenderTexture 增量盖章" 是正确方向，但具体实现决定手感。
-- **放弃 LineRenderer**：Unity 原生 LineRenderer 在拐角和变宽处理上非常生硬。
-- **采用 Mesh Stamping (印章法)**：
-  - 将笔触视为连续的 "点"（Quad）。
-  - 根据笔压 (Pressure) 和速度 (Velocity) 动态调整每个 Quad 的 Scale 和 Alpha。
-  - 使用 `CommandBuffer` 在 `RenderTexture` 上直接绘制 Mesh，避免 CPU `SetPixel` 开销。
-- **MSAA 处理**：RenderTexture 需开启 Anti-Aliasing，或者在 Shader 中做 SDF (Signed Distance Field) 渲染以获得极其锐利的边缘。
+为了实现 "Apple Notes 般" 的流畅度和跨平台一致性，系统基于三大支柱构建：
 
-### 1.2 平滑算法：预测与修正
-"丝滑" 的本质是：**低延迟** + **曲线拟合**。
-- **输入层**：使用 `Unity Input System` 的 `Coalesced Actions` 获取高频触控点（高于帧率）。
-- **算法**：
-  - **Chaikin's Algorithm** 或 **Catmull-Rom Spline** 用于平滑。
-  - **One Euro Filter** 用于过滤手抖（Jitter Reduction）。
-- **预测绘制 (Predictive Painting)**：
-  - 在当前帧，根据速度向量预测下一帧位置并预渲染（虚线或淡色），下一帧真实数据到来时覆盖。这能显著降低视觉延迟感。
+1.  **网格盖章渲染 (Mesh Stamping Rendering)**: 绕过 Unity 的 `LineRenderer`，转而采用 GPU 实例化的四边形盖章技术，以实现完美的笔触控制。
+2.  **确定性逻辑 (Deterministic Logic)**: 所有空间数据都存储在归一化的逻辑坐标系 (0-65535) 中，以确保在不同设备和分辨率下获得相同的结果。
+3.  **整洁架构 (Clean Architecture)**: 严格分离领域逻辑、应用服务和表现层（Unity 视图）。
 
-### 1.3 跨端一致性：定点数物理世界
-浮点数 (float) 在不同 CPU (ARM vs x86) 下可能存在微小精度差异，导致长笔画累积误差。
-- **逻辑坐标**：严格遵守 PRD 的 `0-65535` (uint16)。
-- **数学库**：在 `Domain` 层禁止使用 `Mathf` 或 `float` 进行累积计算。
-  - 使用 `Vector2Int` 存储逻辑坐标。
-  - 笔刷随机散布使用自定义的 **Deterministic Random** (基于 `strokeSeed`)，不依赖 `System.Random` 或 `UnityEngine.Random`。
+## 2. 坐标系统
 
----
+理解坐标转换对于开发至关重要。
 
-## 2. 架构设计 (遵循 Clean Architecture)
+### 2.1 坐标空间
 
-### 2.1 目录结构映射
-```text
-Assets/Scripts/
-├── App/                  # 应用入口与配置
-│   ├── Config/           # 画布尺寸、网络配置
-│   └── MainEntry.cs
-├── Common/               # 通用工具
-│   ├── Math/             # 定点数计算工具
-│   └── Network/          # 基础 Socket 封装
-├── Features/
-│   ├── Drawing/          # 核心绘画业务
-│   │   ├── Domain/       # 实体 (Stroke, Point), 逻辑 (Smoothing)
-│   │   ├── Service/      # 笔刷管理, 历史记录
-│   │   └── Presentation/ # Unity View (InputListener, CanvasRenderer)
-│   └── Room/             # 房间管理业务
-```
+| 空间 | 范围 | 类型 | 用途 |
+| :--- | :--- | :--- | :--- |
+| **输入空间** | `Vector2` (Pixel) | `float` | 来自 `Input.mousePosition` 的原始数据 |
+| **归一化空间** | `Vector2` (0.0 - 1.0) | `float` | 分辨率无关的中间步骤 |
+| **逻辑空间** | `LogicPoint` (0 - 65535) | `ushort` | **存储与网络**。数据的唯一真理源。 |
 
-### 2.2 数据流向 (ODD Loop)
-1. **Input (View)**: 监听屏幕坐标 -> 转换为逻辑坐标 (0-65535)。
-2. **Process (Domain)**: 
-   - 应用平滑算法。
-   - 生成 `StrokePoint`。
-   - 序列化为 Command。
-3. **Network (Service)**: 发送 `STROKE_POINTS`。
-4. **Render (View)**: 
-   - 本地：立即渲染到 `ActiveRenderTexture`。
-   - 远端：接收数据 -> 放入 Buffer -> 插值 -> 渲染到 `ActiveRenderTexture`。
+### 2.2 数据流向
 
----
+1.  **输入**: `MouseInputProvider` 捕获屏幕像素。
+2.  **转换**: 使用 `DrawingConstants.LOGICAL_RESOLUTION` 转换为 `LogicPoint` (0-65535)。
+3.  **存储**: 存储在 `StrokeEntity` 中。
+4.  **渲染**: 转换回归一化 (0-1) -> 屏幕像素，供 `CommandBuffer` 执行。
 
-## 3. 关键数据结构 (C#)
+## 3. 渲染管线 (网格盖章)
+
+`CanvasRenderer.cs` 实现了自定义的 "Mesh Stamping" 技术。
+
+### 3.1 为什么不用 LineRenderer？
+
+Unity 的 `LineRenderer` 生成三角形带。这在尖角处会产生伪影，并且不支持自然地改变每段的不透明度/纹理。
+
+### 3.2 盖章算法
+
+我们不是连接点，而是沿着路径重复“盖”上笔刷纹理。
+
+1.  **输入**: 平滑点列表 (`LogicPoint`)。
+2.  **生成器**: `StrokeStampGenerator` 根据 `SpacingRatio` 计算输入点之间的插值位置。
+    *   *示例*: 如果点间距为 10px，间距为 1px，则生成 10 个印章。
+3.  **批处理**: 印章被收集到 `StampData` 缓冲区中。
+4.  **GPU 实例化**: `CommandBuffer.DrawMesh` 在单个绘制调用（或分批）中绘制数千次简单的四边形网格。
+5.  **材质**: 使用 `BrushStamp.shader`，处理：
+    *   **纹理**: 笔刷笔尖形状。
+    *   **颜色/Alpha**: 通过 `MaterialPropertyBlock` 传递的顶点颜色。
+    *   **混合模式**: 支持标准混合和自定义橡皮擦逻辑 (`ReverseSubtract`)。
+
+## 4. 平滑算法
+
+来自鼠标或触摸屏的原始输入通常是锯齿状的 (10-60Hz)。为了获得平滑的曲线，我们使用 **Catmull-Rom Splines**。
+
+*   **实现**: `StrokeSmoothingService.cs`
+*   **窗口**: 使用 4 个控制点的滑动窗口 ($P_{i-1}, P_i, P_{i+1}, P_{i+2}$)。
+*   **插值**: 在 $P_i$ 和 $P_{i+1}$ 之间生成固定步长（默认为 4）。
+*   **压力**: 随位置线性插值压力值。
+
+## 5. 领域模型与数据结构
+
+### 5.1 LogicPoint (Struct)
+
+针对内存和网络带宽进行了优化。
 
 ```csharp
-// 逻辑层点结构 (内存紧凑)
 public struct LogicPoint {
-    public ushort x;
-    public ushort y;
-    public byte pressure; // 0-255
-    
-    // 压缩辅助：从 float 转换
-    public static LogicPoint FromUnity(Vector2 uv, float p);
-    // 解压：转回 Unity 坐标
-    public Vector2 ToUnity();
-}
-
-// 笔画数据
-public class StrokeEntity {
-    public uint Id;
-    public uint Seed;
-    public ushort BrushId;
-    public List<LogicPoint> Points;
+    public ushort X;        // 2 bytes (0-65535)
+    public ushort Y;        // 2 bytes
+    public byte Pressure;   // 1 byte (0-255)
+    // 总计: 每点 5 字节 (相比 Vector3 的 12 字节)
 }
 ```
 
-## 4. 优化建议 (Beyond MVP)
+### 5.2 StrokeEntity (Class)
 
-1. **笔刷纹理图集 (Atlas)**：将所有笔刷 Tip 打包到一个图集，减少 DrawCall 切换。
-2. **笔迹重放 (Replay)**：不仅用于 Late Join，也可用于 "撤销/重做"。
-   - 既然是矢量存储，Undo 操作只需：`Clear RT` -> `Replay History (minus last)`。
-   - 优化：每 N 步保存一张 `Snapshot RT`，Undo 时从最近 Snapshot 开始重放，速度极快。
+表示单个连续的笔画。
+
+*   **Id**: 唯一标识符。
+*   **Seed**: 用于确定性笔刷抖动的随机种子。
+*   **Points**: `LogicPoint` 列表。
+*   **ColorRGBA**: 用于紧凑存储的 32 位整数颜色。
+
+## 6. 项目结构 (DDD)
+
+```text
+Assets/Scripts/Features/Drawing/
+├── Domain/              # 纯 C# 逻辑，尽量无 Unity 依赖
+│   ├── Entity/          # StrokeEntity
+│   ├── ValueObject/     # LogicPoint
+│   └── Interface/       # IStrokeRenderer
+├── Service/             # 业务逻辑
+│   └── StrokeSmoothingService
+├── Presentation/        # Unity 视图层
+│   ├── CanvasRenderer   # GPU 实现
+│   └── MouseInputProvider # 输入处理
+└── App/                 # 应用层
+    └── DrawingAppService # 外观/控制器
+```
+
+## 7. 未来路线图与优化
+
+1.  **四叉树空间索引 (QuadTree Spatial Indexing)**: 为了高效的“按笔画擦除”或“选择”操作，我们需要快速查找区域内的笔画。
+2.  **计算着色器 (Compute Shaders)**: 将 `StrokeStampGenerator` 逻辑移动到 Compute Shader 以实现大规模并行（每帧 10k+ 印章）。
+3.  **纹理图集 (Texture Atlas)**: 目前每个笔刷笔尖可能是一个单独的纹理。将它们合并到图集中可以减少状态切换。
+4.  **网络协议 (Network Protocol)**: 当前的 `LogicPoint` 结构已准备好进行二进制序列化。增量压缩方案可以进一步减少带宽。
