@@ -10,6 +10,12 @@
 2.  **确定性逻辑 (Deterministic Logic)**: 所有空间数据都存储在归一化的逻辑坐标系 (0-65535) 中，以确保在不同设备和分辨率下获得相同的结果。
 3.  **整洁架构 (Clean Architecture)**: 严格分离领域逻辑、应用服务和表现层（Unity 视图）。
 
+### 1.1 优化概览 (Optimizations)
+
+*   **空间索引**: 使用四叉树 (QuadTree) 加速笔画查询。
+*   **GPU 计算**: 利用 Compute Shader 并行生成印章数据。
+*   **数据压缩**: 自定义二进制协议实现极致的序列化效率。
+
 ## 2. 坐标系统
 
 理解坐标转换对于开发至关重要。
@@ -51,6 +57,16 @@ Unity 的 `LineRenderer` 生成三角形带。这在尖角处会产生伪影，�
     *   **颜色/Alpha**: 通过 `MaterialPropertyBlock` 传递的顶点颜色。
     *   **混合模式**: 支持标准混合和自定义橡皮擦逻辑 (`ReverseSubtract`)。
 
+### 3.3 GPU 加速 (Compute Shader)
+
+对于重绘、撤销/重做或加载大型绘图文件等高负载场景，我们启用 **Compute Shader** (`StrokeGeneration.compute`) 进行并行处理。
+
+*   **数据结构**: `StructuredBuffer<LogicPoint>` (Input) -> `AppendStructuredBuffer<StampData>` (Output).
+*   **混合策略**:
+    *   **实时绘制**: 使用 CPU (无延迟，无状态开销)。
+    *   **批量操作**: 自动切换至 GPU (吞吐量优先)。
+*   **对齐**: HLSL 结构体遵循 16 字节对齐，C# 端结构体 (`GpuLogicPoint`) 显式添加 Padding 以匹配。
+
 ## 4. 平滑算法
 
 来自鼠标或触摸屏的原始输入通常是锯齿状的 (10-60Hz)。为了获得平滑的曲线，我们使用 **Catmull-Rom Splines**。
@@ -61,6 +77,14 @@ Unity 的 `LineRenderer` 生成三角形带。这在尖角处会产生伪影，�
 *   **压力**: 随位置线性插值压力值。
 
 ## 5. 领域模型与数据结构
+
+### 5.0 空间索引 (Spatial Indexing)
+
+为了支持高效的橡皮擦和选区操作，引入了四叉树结构。
+
+*   **实现**: `StrokeSpatialIndex` 封装了 `QuadTree<StrokeEntity>`。
+*   **机制**: 每个笔画 (`StrokeEntity`) 计算其 AABB 包围盒并插入四叉树。
+*   **查询**: 支持矩形区域查询，返回与该区域相交的所有笔画候选集，复杂度从 O(N) 降低至 O(logN)。
 
 ### 5.1 LogicPoint (Struct)
 
@@ -84,6 +108,16 @@ public struct LogicPoint {
 *   **Points**: `LogicPoint` 列表。
 *   **ColorRGBA**: 用于紧凑存储的 32 位整数颜色。
 
+### 5.3 序列化协议 (Serialization Protocol)
+
+采用自定义二进制格式 (`StrokeSerializer`)，极大优于 JSON/XML。
+
+*   **Header**: `STRK` (Magic) + Version (1 byte).
+*   **VarInt**: 使用变长整数编码长度和索引，节省空间。
+*   **Delta Encoding**: 笔画中的点存储相对于前一个点的增量 (dx, dy, dp)。
+    *   配合 **ZigZag** 编码，有效处理负数增量。
+*   **效果**: 平均单点存储大小压缩至 **< 5 字节**。
+
 ## 6. 项目结构 (DDD)
 
 ```text
@@ -101,8 +135,27 @@ Assets/Scripts/Features/Drawing/
     └── DrawingAppService # 外观/控制器
 ```
 
-## 7. 未来路线图与优化
+## 7. 未来路线图与优化 (Future Roadmap & Optimization)
 
-1.  **四叉树空间索引 (QuadTree Spatial Indexing)**: 为了高效的“按笔画擦除”或“选择”操作，我们需要快速查找区域内的笔画。
-2.  **计算着色器 (Compute Shaders)**: 将 `StrokeStampGenerator` 逻辑移动到 Compute Shader 以实现大规模并行（每帧 10k+ 印章）。
-3.  **网络协议 (Network Protocol)**: 当前的 `LogicPoint` 结构已准备好进行二进制序列化。增量压缩方案可以进一步减少带宽。
+### 已完成 (Completed) ✅
+*   **四叉树空间索引 (QuadTree Spatial Indexing)**: 已集成 `StrokeSpatialIndex`，支持高效的空间查询。
+*   **GPU 加速 (GPU Acceleration)**: 已实现 `Compute Shader` 笔触生成，支持混合渲染管线（Hybrid Rendering Pipeline）。
+*   **二进制协议 (Binary Protocol)**: 已实现基于 VarInt 和增量编码（Delta Encoding）的 `StrokeSerializer`，平均单点 < 5 字节。
+
+### 待办事项 (Upcoming) 🚀
+1.  **无限画布 (Infinite Canvas)**
+    *   突破 `LOGICAL_RESOLUTION` (65535) 限制。
+    *   引入基于分块 (Chunk) 的动态加载与坐标映射系统。
+
+2.  **多人实时协同 (Real-time Collaboration)**
+    *   构建基于 WebSocket/Relay 的同步服务。
+    *   利用现有的二进制增量协议实现低延迟笔迹同步。
+    *   处理多用户并发冲突。
+
+3.  **笔迹回放与导出 (Playback & Export)**
+    *   基于序列化数据的绘画过程回放。
+    *   将矢量笔画导出为 SVG/PDF 格式，实现真正的分辨率无关性。
+
+4.  **笔刷引擎增强 (Brush Engine 2.0)**
+    *   支持纹理散射 (Scattering) 和 随机色相/抖动。
+    *   支持双重笔刷 (Dual Brush) 纹理合成。
