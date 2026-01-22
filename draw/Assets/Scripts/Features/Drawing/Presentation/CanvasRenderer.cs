@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.Rendering;
 using System.Collections.Generic;
+using Features.Drawing.Domain;
 using Features.Drawing.Domain.ValueObject;
 using Common.Constants;
 
@@ -21,7 +22,7 @@ namespace Features.Drawing.Presentation
     /// Handles the low-level GPU drawing using CommandBuffers.
     /// Implements the "Mesh Stamping" technique.
     /// </summary>
-    public class CanvasRenderer : MonoBehaviour
+    public class CanvasRenderer : MonoBehaviour, Features.Drawing.Domain.Interface.IStrokeRenderer
     {
         [Header("Settings")]
         [SerializeField] private Vector2Int _resolution = new Vector2Int(2048, 2048);
@@ -91,8 +92,7 @@ namespace Features.Drawing.Presentation
         private void InitializeGraphics()
         {
             // 0. Auto-adjust resolution to match screen aspect ratio (if not fixed)
-            // This prevents visual distortion when the RawImage is stretched.
-            // We use the RawImage rect if available, otherwise Screen aspect.
+            // ...
             float aspect = 1.0f;
             if (_displayImage != null && _displayImage.rectTransform != null && _displayImage.rectTransform.rect.width > 0)
             {
@@ -103,11 +103,9 @@ namespace Features.Drawing.Presentation
                 aspect = (float)Screen.width / Screen.height;
             }
 
-            // Keep the larger dimension at least 2048 (or current setting)
-            // If aspect > 1 (Landscape), Width = 2048, Height = 2048/Aspect
-            // If aspect < 1 (Portrait), Height = 2048, Width = 2048*Aspect
+            // ... (Resolution logic)
             int maxDim = _baseMaxDimension > 0 ? _baseMaxDimension : Mathf.Max(_resolution.x, _resolution.y);
-            if (maxDim < 2048) maxDim = 2048; // Ensure minimum quality
+            if (maxDim < 2048) maxDim = 2048; 
 
             if (aspect >= 1f)
             {
@@ -127,6 +125,11 @@ namespace Features.Drawing.Presentation
             if (_brushShader == null) 
                 _brushShader = Shader.Find("Drawing/BrushStamp");
             
+            if (_brushShader == null)
+            {
+                Debug.LogError("[CanvasRenderer] CRITICAL: Brush Shader NOT FOUND!");
+            }
+
             _brushMaterial = new Material(_brushShader);
             if (_defaultBrushTip != null)
                 _brushMaterial.mainTexture = _defaultBrushTip;
@@ -304,18 +307,8 @@ namespace Features.Drawing.Presentation
 
         public void SetBrushSize(float size)
         {
+            Debug.Log($"[CanvasRenderer] SetBrushSize: {size}");
             _brushSize = Mathf.Max(1.0f, size);
-        }
-
-        public void SetBrushOpacity(float opacity)
-        {
-            _brushOpacity = Mathf.Clamp01(opacity);
-        }
-
-        public void SetRotationMode(BrushRotationMode mode)
-        {
-            _rotationMode = mode;
-            _stampGenerator.RotationMode = mode;
         }
 
         public void SetBrushColor(Color color)
@@ -329,31 +322,54 @@ namespace Features.Drawing.Presentation
             _isEraser = isEraser;
         }
 
-        public void SetBrushTexture(Texture2D texture)
+        /// <summary>
+        /// Configures the brush appearance and behavior based on a Strategy object.
+        /// </summary>
+        public void ConfigureBrush(BrushStrategy strategy, Texture2D runtimeTexture = null)
         {
-            if (texture != null && _brushMaterial != null)
+            if (strategy == null) return;
+
+            // 1. Texture
+            Texture2D tex = runtimeTexture != null ? runtimeTexture : strategy.MainTexture;
+            
+            // If texture is still null (e.g. strategy has no texture and UseRuntimeGeneration is false),
+            // fallback to default
+            if (tex == null && _defaultBrushTip != null)
             {
-                _brushMaterial.mainTexture = texture;
+                tex = _defaultBrushTip;
             }
-        }
 
-        public void SetSpacingRatio(float ratio)
-        {
-            _stampGenerator.SpacingRatio = ratio;
-        }
+            if (tex != null && _brushMaterial != null)
+            {
+                _brushMaterial.mainTexture = tex;
+            }
+            
+            // 2. Parameters
+            // If strategy.Opacity is 0, we should fallback to 1? Or trust the strategy?
+            // Usually Opacity 0 means invisible. Let's assume strategy is correct but debug if it's suspicious.
+            _brushOpacity = strategy.Opacity;
+            _rotationMode = strategy.RotationMode;
+            
+            // CRITICAL: Ensure _stampGenerator is initialized before accessing
+            if (_stampGenerator == null) _stampGenerator = new StrokeStampGenerator();
 
-        public void SetAngleJitter(float jitterDegrees)
-        {
-            _stampGenerator.AngleJitter = jitterDegrees;
-        }
+            _stampGenerator.RotationMode = strategy.RotationMode;
+            _stampGenerator.SpacingRatio = strategy.SpacingRatio;
+            _stampGenerator.AngleJitter = strategy.AngleJitter;
+            
+            // Reset generator state
+            _stampGenerator.Reset();
 
-        public void SetBlendMode(BlendOp op, BlendMode src, BlendMode dst)
-        {
+            // 3. Blend Mode
             if (_brushMaterial != null)
             {
-                _brushMaterial.SetInt("_BlendOp", (int)op);
-                _brushMaterial.SetInt("_SrcBlend", (int)src);
-                _brushMaterial.SetInt("_DstBlend", (int)dst);
+                _brushMaterial.SetInt("_BlendOp", (int)strategy.BlendOp);
+                _brushMaterial.SetInt("_SrcBlend", (int)strategy.SrcBlend);
+                _brushMaterial.SetInt("_DstBlend", (int)strategy.DstBlend);
+                
+                // Force update material keywords if needed (Standard shader relies on this, custom shader might not)
+                // But let's log to be sure
+                Debug.Log($"[CanvasRenderer] Applied Brush: {strategy.name}, Op: {strategy.BlendOp}, Tex: {(tex ? tex.name : "null")}");
             }
         }
 
@@ -362,7 +378,11 @@ namespace Features.Drawing.Presentation
         /// </summary>
         public void DrawPoints(IEnumerable<LogicPoint> points)
         {
-            if (_activeRT == null) return;
+            if (_activeRT == null)
+            {
+                Debug.LogError("[CanvasRenderer] ActiveRT is null!");
+                return;
+            }
 
             UpdateStampGeneratorScaleIfNeeded();
             _cmd.Clear();
@@ -377,7 +397,7 @@ namespace Features.Drawing.Presentation
                 _brushMaterial.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
                 _brushMaterial.SetInt("_BlendOp", (int)BlendOp.Add); // Ensure Op is Add for eraser
             }
-            // ELSE: Do NOT force override blend modes. Trust the state set by SetBlendMode.
+            // ELSE: Do NOT force override blend modes. Trust the state set by ConfigureBrush.
             
             _cmd.SetRenderTarget(_activeRT);
 
@@ -393,7 +413,7 @@ namespace Features.Drawing.Presentation
 
             // Generate stamps
             _stampGenerator.ProcessPoints(points, _brushSize, _stampBuffer);
-
+            
             // Draw stamps
             foreach (var stamp in _stampBuffer)
             {
@@ -413,7 +433,7 @@ namespace Features.Drawing.Presentation
             _cmd.DrawMesh(_quadMesh, matrix, _brushMaterial, 0, 0, _props);
         }
         
-        public void Clear()
+        public void ClearCanvas()
         {
             Graphics.SetRenderTarget(_activeRT);
             GL.Clear(true, true, Color.clear);
@@ -422,7 +442,7 @@ namespace Features.Drawing.Presentation
             _stampGenerator.Reset();
         }
 
-        public void EndStrokeState()
+        public void EndStroke()
         {
             _stampGenerator.Reset();
         }

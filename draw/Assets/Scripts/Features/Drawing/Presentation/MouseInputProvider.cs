@@ -1,73 +1,102 @@
-using UnityEngine;
 using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.EventSystems;
 using Features.Drawing.Domain.ValueObject;
-using Features.Drawing.Service;
-using Common.Constants;
+using Features.Drawing.App; 
 
 namespace Features.Drawing.Presentation
 {
     /// <summary>
     /// Simple Mouse Input Provider for testing in Editor.
-    /// Captures Mouse position, converts to LogicPoints, smooths them, and sends to Renderer.
+    /// Captures Mouse position and delegates to DrawingAppService.
     /// </summary>
-    [RequireComponent(typeof(CanvasRenderer))]
     public class MouseInputProvider : MonoBehaviour
     {
-        [SerializeField] private RectTransform _inputArea; // The UI area receiving input
-        
-        private CanvasRenderer _renderer;
-        private StrokeSmoothingService _smoothingService;
+        [SerializeField] private RectTransform _inputArea;
+        [SerializeField] private DrawingAppService _appService;
         
         private bool _isDrawing = false;
-        private List<LogicPoint> _currentStrokeRaw = new List<LogicPoint>();
-        
-        // Emulate high-frequency input
         private Vector2 _lastPos;
-
-        // GC Optimization
-        private List<LogicPoint> _smoothingInputBuffer = new List<LogicPoint>(8);
-        private List<LogicPoint> _smoothingOutputBuffer = new List<LogicPoint>(32);
-        private List<LogicPoint> _singlePointBuffer = new List<LogicPoint>(1);
+        private readonly List<RaycastResult> _raycastResults = new List<RaycastResult>(8);
 
         private void Awake()
         {
-            _renderer = GetComponent<CanvasRenderer>();
-            _smoothingService = new StrokeSmoothingService();
+            if (_inputArea == null)
+            {
+                _inputArea = GetComponent<RectTransform>();
+                if (_inputArea == null)
+                {
+                    Debug.LogError("MouseInputProvider: No Input Area (RectTransform) assigned or found on this GameObject!");
+                }
+            }
+            
+            if (_appService == null)
+            {
+                _appService = FindObjectOfType<DrawingAppService>();
+                if (_appService == null)
+                {
+                    var go = new GameObject("DrawingAppService");
+                    _appService = go.AddComponent<DrawingAppService>();
+                }
+            }
         }
 
         private void Update()
         {
+            if (_appService == null) return;
+            
             // 1. Input Detection (Mouse)
             bool isDown = Input.GetMouseButtonDown(0);
             bool isUp = Input.GetMouseButtonUp(0);
             bool isHeld = Input.GetMouseButton(0);
 
-            // Optimization: Skip everything if no input
-            if (!isDown && !isUp && !isHeld) return;
-
             Vector2 screenPos = Input.mousePosition;
+
+            // 0. Block Input over UI
+            // Only block the START of a stroke. If we are already drawing, we continue.
+            // DEBUG: Force disable blocking to test if drawing works
+            /*
+            if (isDown && IsPointerOverBlockingUi(screenPos))
+            {
+                return;
+            }
+            */
+            if (isDown) 
+            {
+                bool blocked = IsPointerOverBlockingUi(screenPos);
+                if (blocked) 
+                {
+                    // Debug.LogWarning("[MouseInput] UI Block Detected.");
+                    return;
+                }
+            }
+            else if (isHeld && !_isDrawing)
+            {
+                // If held but not drawing (e.g. started over UI then dragged onto canvas),
+                // we should NOT start drawing mid-drag to avoid weird artifacts.
+                // Or maybe we should? Standard behavior is usually NO.
+                return;
+            }
+
+            if (!isDown && !isUp && !isHeld) return;
             
-            // Convert Screen -> Local UI -> Normalized (0-1)
             if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
                 _inputArea, screenPos, null, out Vector2 localPos))
             {
-                return; // Outside?
+                return; 
             }
 
-            // Local (-W/2, -H/2) -> Normalized (0, 1)
             Rect rect = _inputArea.rect;
             float u = (localPos.x - rect.x) / rect.width;
             float v = (localPos.y - rect.y) / rect.height;
             Vector2 normalizedPos = new Vector2(u, v);
 
-            // Filter out of bounds
             if (u < 0 || u > 1 || v < 0 || v > 1)
             {
                 if (_isDrawing) EndStroke();
                 return;
             }
 
-            // 2. State Machine
             if (isDown)
             {
                 StartStroke(normalizedPos);
@@ -85,61 +114,69 @@ namespace Features.Drawing.Presentation
         private void StartStroke(Vector2 pos)
         {
             _isDrawing = true;
-            _currentStrokeRaw.Clear();
             _lastPos = pos;
-            
-            AddPoint(pos);
+            _appService.StartStroke(LogicPoint.FromNormalized(pos, 1.0f));
         }
 
         private void ContinueStroke(Vector2 pos)
         {
-            // Simple distance filter to avoid duplicates
             if (Vector2.Distance(pos, _lastPos) < 0.001f) return;
-            
-            AddPoint(pos);
             _lastPos = pos;
+            _appService.MoveStroke(LogicPoint.FromNormalized(pos, 1.0f));
         }
 
         private void EndStroke()
         {
             _isDrawing = false;
-            _currentStrokeRaw.Clear();
-            _renderer.EndStrokeState();
+            _appService.EndStroke();
         }
 
-        private void AddPoint(Vector2 pos)
+        private bool IsPointerOverBlockingUi(Vector2 screenPos)
         {
-            // Fake pressure for mouse: 1.0
-            LogicPoint newPoint = LogicPoint.FromNormalized(pos, 1.0f);
-            _currentStrokeRaw.Add(newPoint);
+            if (EventSystem.current == null) return false;
 
-            // 3. Process & Draw
-            // Use sliding window to smooth only the new segment
-            
-            if (_currentStrokeRaw.Count >= 4)
+            PointerEventData pointerData = new PointerEventData(EventSystem.current);
+
+            pointerData.position = screenPos;
+            _raycastResults.Clear();
+            EventSystem.current.RaycastAll(pointerData, _raycastResults);
+
+            if (_raycastResults.Count == 0) return false;
+            if (_inputArea == null) return true;
+
+            Transform inputTransform = _inputArea.transform;
+
+            // Iterate through all hit objects
+            foreach (var result in _raycastResults)
             {
-                // Extract last 4 control points without allocating new list
-                // We use a reusable buffer
-                _smoothingInputBuffer.Clear();
-                int count = _currentStrokeRaw.Count;
-                _smoothingInputBuffer.Add(_currentStrokeRaw[count - 4]);
-                _smoothingInputBuffer.Add(_currentStrokeRaw[count - 3]);
-                _smoothingInputBuffer.Add(_currentStrokeRaw[count - 2]);
-                _smoothingInputBuffer.Add(_currentStrokeRaw[count - 1]);
+                GameObject hitObj = result.gameObject;
+                Transform hitTransform = hitObj.transform;
 
-                // Smooth into output buffer
-                _smoothingService.SmoothPoints(_smoothingInputBuffer, _smoothingOutputBuffer);
+                // 1. If we hit the input area (or its children), we are good to go!
+                if (hitTransform == inputTransform || hitTransform.IsChildOf(inputTransform))
+                {
+                    return false; // Not blocked, we found the canvas!
+                }
+
+                // 2. If we hit something else, check if it's "interactive"
+                bool isInteractive = hitObj.GetComponentInParent<UnityEngine.UI.Selectable>() != null;
                 
-                // Draw the interpolated segment
-                _renderer.DrawPoints(_smoothingOutputBuffer);
+                if (isInteractive)
+                {
+                    return true; // Blocked by button/slider/etc.
+                }
             }
-            else
-            {
-                // Just draw the point itself if not enough for spline
-                _singlePointBuffer.Clear();
-                _singlePointBuffer.Add(newPoint);
-                _renderer.DrawPoints(_singlePointBuffer);
-            }
+
+            // If we are here, it means we hit some UI elements (like background images, text labels, containers),
+            // but NONE of them were "interactive" (buttons, etc.), and NONE of them were the InputArea.
+            
+            return false; 
+        }
+
+        private string GetPath(Transform t)
+        {
+            if (t.parent == null) return t.name;
+            return GetPath(t.parent) + "/" + t.name;
         }
     }
 }

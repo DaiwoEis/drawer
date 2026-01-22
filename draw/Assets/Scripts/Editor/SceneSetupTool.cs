@@ -2,7 +2,9 @@ using UnityEngine;
 using UnityEditor;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
+using UnityEngine.Rendering;
 using Features.Drawing.Presentation;
+using Features.Drawing.Domain;
 
 namespace Editor
 {
@@ -11,6 +13,9 @@ namespace Editor
         [MenuItem("Drawing/Setup Scene (One Click)")]
         public static void SetupScene()
         {
+            // 0. Setup Assets first
+            SetupBrushAssets();
+
             // 1. Ensure EventSystem exists
             if (Object.FindObjectOfType<EventSystem>() == null)
             {
@@ -38,91 +43,141 @@ namespace Editor
             
             RawImage rawImage = boardObj.AddComponent<RawImage>();
             rawImage.color = Color.white;
+            rawImage.raycastTarget = false; // Disable Raycast Target to allow input passthrough logic
             
-            // Make it stretch to fill screen
             RectTransform rect = boardObj.GetComponent<RectTransform>();
             rect.anchorMin = Vector2.zero;
             rect.anchorMax = Vector2.one;
-            rect.sizeDelta = Vector2.zero; // Reset offsets
+            rect.sizeDelta = Vector2.zero;
             
             Undo.RegisterCreatedObjectUndo(boardObj, "Create DrawingBoard");
 
             // 4. Add Scripts
             Features.Drawing.Presentation.CanvasRenderer renderer = boardObj.AddComponent<Features.Drawing.Presentation.CanvasRenderer>();
             
-            // Set resolution to match screen aspect ratio roughly, or high res
-            // For now hardcoded 2048x2048, but better to match aspect
-            // Let's use 2048x1536 (iPad like) or 1920x1080
-            // Or use Screen.width/height if in play mode, but here we are in editor.
-            // Let's stick to square for simplicity or 2048x2048, 
-            // but the issue user reported is about distortion.
-            // If resolution is 2048x2048 but screen is 1920x1080, pixels are stretched.
-            // We need to ensure the Renderer knows the aspect ratio or uses square pixels.
-            // Our fix in StrokeStampGenerator handles scaleFactor based on Min(scaleX, scaleY),
-            // which ensures the brush remains circular (uniform scale) relative to the smallest dimension.
-            // But if the RenderImage is stretched, the underlying pixels are stretched.
-            // Ideally, we should set the RenderTexture resolution to match the Screen aspect ratio.
-            
-            // For MVP setup, let's keep 2048x2048. 
-            // The previous fix in StrokeStampGenerator (multiplying by scaleFactor) 
-            // fixes the size calculation in logic space.
-            // However, we also need to ensure the QUAD drawn to the RT is not distorted by the RT's own non-square-ness relative to screen?
-            // Actually, if RT is 2048x2048 and displayed on 1920x1080 Image (Stretched),
-            // a perfect circle in RT (e.g. 100x100 pixels) will look flattened on screen.
-            
-            // To fix this visual distortion, the RT aspect ratio MUST match the Image Rect aspect ratio.
-            // Since we can't know the runtime aspect ratio at setup time easily (dynamic window),
-            // we should probably write a script to update RT resolution on Start() or Awake().
-            
             MouseInputProvider input = boardObj.AddComponent<MouseInputProvider>();
 
-            // 5. Create Toolbar UI
-            CreateToolbarUI(canvas, renderer);
-
-            // 6. Setup References (using SerializedObject to access private fields if needed, 
-            // but since they are [SerializeField], direct assignment via reflection or SerializedObject is best)
+            // 5. Create App Service (Application Layer)
+            GameObject appObj = new GameObject("DrawingAppService");
+            var appService = appObj.AddComponent<Features.Drawing.App.DrawingAppService>();
             
-            // Generate Default Brush Texture
-            Texture2D brushTex = GenerateSoftCircleTexture();
-            string brushPath = "Assets/DefaultBrush.png";
-            System.IO.File.WriteAllBytes(brushPath, brushTex.EncodeToPNG());
-            AssetDatabase.ImportAsset(brushPath);
-            Texture2D savedBrush = AssetDatabase.LoadAssetAtPath<Texture2D>(brushPath);
+            SerializedObject soApp = new SerializedObject(appService);
+            soApp.FindProperty("_concreteRenderer").objectReferenceValue = renderer;
+            soApp.ApplyModifiedProperties();
 
-            // Generate Pencil Brush Texture
-            Texture2D pencilTex = GeneratePencilTexture();
-            string pencilPath = "Assets/PencilBrush.png";
-            System.IO.File.WriteAllBytes(pencilPath, pencilTex.EncodeToPNG());
-            AssetDatabase.ImportAsset(pencilPath);
+            Undo.RegisterCreatedObjectUndo(appObj, "Create AppService");
 
-            // Assign via SerializedObject to support Undo and private fields
+            // 6. Create Toolbar UI
+            CreateToolbarUI(canvas, appService);
+
+            // 7. Setup References
+            Texture2D savedBrush = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/SoftBrush.png");
+
             SerializedObject soRenderer = new SerializedObject(renderer);
             soRenderer.FindProperty("_displayImage").objectReferenceValue = rawImage;
             soRenderer.FindProperty("_defaultBrushTip").objectReferenceValue = savedBrush;
             
-            // Find shader
             Shader brushShader = Shader.Find("Drawing/BrushStamp");
             if (brushShader != null)
-            {
                 soRenderer.FindProperty("_brushShader").objectReferenceValue = brushShader;
-            }
-            else
-            {
-                Debug.LogWarning("Could not find shader 'Drawing/BrushStamp'. Please ensure it exists.");
-            }
+            
             soRenderer.ApplyModifiedProperties();
 
             SerializedObject soInput = new SerializedObject(input);
             soInput.FindProperty("_inputArea").objectReferenceValue = rect;
             soInput.ApplyModifiedProperties();
 
-            // 7. Select the object
+            // 8. Select the object
             Selection.activeGameObject = boardObj;
             
             Debug.Log("Scene Setup Complete! Click 'Play' to test.");
         }
 
-        private static void CreateToolbarUI(Canvas canvas, Features.Drawing.Presentation.CanvasRenderer renderer)
+        private static void SetupBrushAssets()
+        {
+            // 1. Generate Textures
+            Texture2D softTex = GenerateSoftCircleTexture();
+            Texture2D hardTex = GenerateHardCircleTexture();
+            Texture2D markerTex = GenerateMarkerTexture();
+            Texture2D pencilTex = GeneratePencilTexture();
+
+            string softTexPath = "Assets/SoftBrush.png";
+            string hardTexPath = "Assets/HardBrush.png";
+            string markerTexPath = "Assets/MarkerBrush.png";
+            string pencilTexPath = "Assets/PencilBrush.png";
+
+            System.IO.File.WriteAllBytes(softTexPath, softTex.EncodeToPNG());
+            System.IO.File.WriteAllBytes(hardTexPath, hardTex.EncodeToPNG());
+            System.IO.File.WriteAllBytes(markerTexPath, markerTex.EncodeToPNG());
+            System.IO.File.WriteAllBytes(pencilTexPath, pencilTex.EncodeToPNG());
+
+            AssetDatabase.ImportAsset(softTexPath);
+            AssetDatabase.ImportAsset(hardTexPath);
+            AssetDatabase.ImportAsset(markerTexPath);
+            AssetDatabase.ImportAsset(pencilTexPath);
+
+            // 1.5 Configure Texture Importers
+            ConfigureTextureImporter(softTexPath);
+            ConfigureTextureImporter(hardTexPath);
+            ConfigureTextureImporter(markerTexPath);
+            ConfigureTextureImporter(pencilTexPath);
+
+            // 2. Load Textures
+            softTex = AssetDatabase.LoadAssetAtPath<Texture2D>(softTexPath);
+            hardTex = AssetDatabase.LoadAssetAtPath<Texture2D>(hardTexPath);
+            markerTex = AssetDatabase.LoadAssetAtPath<Texture2D>(markerTexPath);
+            pencilTex = AssetDatabase.LoadAssetAtPath<Texture2D>(pencilTexPath);
+
+            // 3. Configure Strategies
+            string domainPath = "Assets/Scripts/Features/Drawing/Domain";
+            ConfigureStrategy(domainPath + "/SoftBrush.asset", softTex, 0.5f, 0.15f, BlendOp.Add, BrushRotationMode.None);
+            ConfigureStrategy(domainPath + "/HardBrush.asset", hardTex, 1.0f, 0.05f, BlendOp.Add, BrushRotationMode.None, false); // DISABLED RUNTIME GENERATION
+            ConfigureStrategy(domainPath + "/MarkerBrush.asset", markerTex, 0.8f, 0.1f, BlendOp.Add, BrushRotationMode.Fixed);
+            ConfigureStrategy(domainPath + "/PencilBrush.asset", pencilTex, 0.6f, 0.2f, BlendOp.Add, BrushRotationMode.None, false, 360f);
+            
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+        }
+
+        private static void ConfigureStrategy(string path, Texture2D tex, float opacity, float spacing, BlendOp op, BrushRotationMode rot, bool runtime = false, float jitter = 0f)
+        {
+            BrushStrategy strategy = AssetDatabase.LoadAssetAtPath<BrushStrategy>(path);
+            if (strategy == null)
+            {
+                strategy = ScriptableObject.CreateInstance<BrushStrategy>();
+                AssetDatabase.CreateAsset(strategy, path);
+            }
+
+            strategy.MainTexture = tex;
+            strategy.Opacity = opacity;
+            strategy.SpacingRatio = spacing;
+            strategy.BlendOp = op;
+            strategy.RotationMode = rot;
+            strategy.UseRuntimeGeneration = runtime;
+            strategy.AngleJitter = jitter;
+            
+            strategy.SrcBlend = BlendMode.One; 
+            strategy.DstBlend = BlendMode.OneMinusSrcAlpha;
+
+            EditorUtility.SetDirty(strategy);
+        }
+
+        private static void ConfigureTextureImporter(string path)
+        {
+            TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
+            if (importer != null)
+            {
+                importer.textureType = TextureImporterType.Default;
+                importer.alphaIsTransparency = true;
+                importer.mipmapEnabled = false;
+                importer.filterMode = FilterMode.Bilinear;
+                importer.wrapMode = TextureWrapMode.Clamp;
+                importer.textureCompression = TextureImporterCompression.Uncompressed; // Ensure high quality for brushes
+                importer.SaveAndReimport();
+            }
+        }
+
+        private static void CreateToolbarUI(Canvas canvas, Features.Drawing.App.DrawingAppService appService)
         {
             // Root Container
             GameObject root = new GameObject("DrawingUI_Root");
@@ -132,162 +187,130 @@ namespace Editor
             rootRect.anchorMax = Vector2.one;
             rootRect.sizeDelta = Vector2.zero;
 
-            // 1. Secondary Panels (Floating above toolbar)
-            // Container for panels
+            // --- Top Bar (Undo / Clear) ---
+            GameObject topBar = new GameObject("TopBar");
+            topBar.transform.SetParent(root.transform, false);
+            RectTransform topRect = topBar.AddComponent<RectTransform>();
+            topRect.anchorMin = new Vector2(0, 1);
+            topRect.anchorMax = new Vector2(1, 1);
+            topRect.pivot = new Vector2(0.5f, 1);
+            topRect.sizeDelta = new Vector2(0, 60);
+            topRect.anchoredPosition = Vector2.zero;
+
+            // Top Buttons Container (Right Aligned)
+            HorizontalLayoutGroup topLayout = topBar.AddComponent<HorizontalLayoutGroup>();
+            topLayout.childAlignment = TextAnchor.MiddleRight;
+            topLayout.padding = new RectOffset(20, 20, 10, 10);
+            topLayout.spacing = 20;
+
+            var btnUndo = CreateTextBtn(topBar, "Btn_Undo", "撤销");
+            var btnClear = CreateTextBtn(topBar, "Btn_Clear", "清屏");
+
+            // --- Sub Panels Container (Above Bottom Bar) ---
             GameObject panelContainer = new GameObject("PanelContainer");
             panelContainer.transform.SetParent(root.transform, false);
             RectTransform panelRect = panelContainer.AddComponent<RectTransform>();
             panelRect.anchorMin = new Vector2(0, 0);
             panelRect.anchorMax = new Vector2(1, 0);
             panelRect.pivot = new Vector2(0.5f, 0);
-            panelRect.anchoredPosition = new Vector2(0, 100); // Sit above main toolbar
-            panelRect.sizeDelta = new Vector2(0, 120); // Height of sub panel
+            panelRect.anchoredPosition = new Vector2(0, 80); // Above nav bar
+            panelRect.sizeDelta = new Vector2(0, 100); 
 
-            // Eraser Panel
-            GameObject eraserPanel = CreateSubPanel(panelContainer, "EraserPanel");
-            // Brush Panel
+            Image panelBg = panelContainer.AddComponent<Image>();
+            panelBg.color = new Color(1, 1, 1, 0.9f); // Semi-transparent white bg for panels
+
+            // 1. Brush Panel
             GameObject brushPanel = CreateSubPanel(panelContainer, "BrushPanel");
-
-            // 2. Main Toolbar (Bottom)
-            GameObject mainToolbar = new GameObject("MainToolbar");
-            mainToolbar.transform.SetParent(root.transform, false);
-            RectTransform mainRect = mainToolbar.AddComponent<RectTransform>();
-            // Use stretched width with padding
-            mainRect.anchorMin = new Vector2(0.1f, 0); // 10% from left
-            mainRect.anchorMax = new Vector2(0.9f, 0); // 10% from right
-            mainRect.pivot = new Vector2(0.5f, 0);
-            mainRect.sizeDelta = new Vector2(0, 100); // Taller: 100px
-            mainRect.anchoredPosition = new Vector2(0, 30); // Safe area
-
-            Image mainBg = mainToolbar.AddComponent<Image>();
-            mainBg.color = new Color(0.95f, 0.95f, 0.95f, 1f);
+            HorizontalLayoutGroup brushLayout = brushPanel.AddComponent<HorizontalLayoutGroup>();
+            brushLayout.childAlignment = TextAnchor.MiddleCenter;
+            brushLayout.spacing = 30;
             
-            HorizontalLayoutGroup mainLayout = mainToolbar.AddComponent<HorizontalLayoutGroup>();
-            mainLayout.childControlWidth = false;
-            mainLayout.childForceExpandWidth = false;
-            mainLayout.spacing = 80; // WIDER SPACING
-            mainLayout.childAlignment = TextAnchor.MiddleCenter;
+            Button btnSoft = CreateIconBtn(brushPanel, "Type_Soft", Color.gray, "Soft");
+            Button btnHard = CreateIconBtn(brushPanel, "Type_Hard", Color.black, "Hard");
+            Button btnMarker = CreateIconBtn(brushPanel, "Type_Marker", Color.blue, "Marker");
+            Button btnPencil = CreateIconBtn(brushPanel, "Type_Pencil", Color.red, "Pencil");
 
-            // --- Populate Main Toolbar ---
-            // Use larger buttons
-            var btnEraser = CreateIconBtn(mainToolbar, "Btn_Eraser", Color.white, "Eraser");
-            var btnBrush = CreateIconBtn(mainToolbar, "Btn_Brush", Color.white, "Brush");
-            var btnClear = CreateIconBtn(mainToolbar, "Btn_Clear", Color.white, "Clear");
-
-            // --- Populate Eraser Panel ---
-            // 5 Size Dots
-            HorizontalLayoutGroup eraserLayout = eraserPanel.AddComponent<HorizontalLayoutGroup>();
-            eraserLayout.childAlignment = TextAnchor.MiddleCenter;
-            eraserLayout.spacing = 30; // WIDER SPACING
+            // 2. Size Panel
+            GameObject sizePanel = CreateSubPanel(panelContainer, "SizePanel");
+            HorizontalLayoutGroup sizeLayout = sizePanel.AddComponent<HorizontalLayoutGroup>();
+            sizeLayout.childAlignment = TextAnchor.MiddleCenter;
+            sizeLayout.spacing = 40;
             
-            Button[] eraserSizes = new Button[5];
-            for(int i=0; i<5; i++) eraserSizes[i] = CreateDotBtn(eraserPanel, $"Size_{i}", 20 + i*10, Color.black);
+            Button[] sizeBtns = new Button[5];
+            for(int i=0; i<5; i++) sizeBtns[i] = CreateDotBtn(sizePanel, $"Size_{i}", 20 + i*15, Color.black);
 
-            // --- Populate Brush Panel ---
-            // Need Vertical Layout: Row 1 = Color/Type, Row 2 = Size
-            VerticalLayoutGroup brushVLayout = brushPanel.AddComponent<VerticalLayoutGroup>();
-            brushVLayout.childControlHeight = false;
-            brushVLayout.childForceExpandHeight = false;
-            brushVLayout.spacing = 20; // WIDER SPACING
-            brushVLayout.padding = new RectOffset(20,20,20,20);
-            brushVLayout.childAlignment = TextAnchor.MiddleCenter;
-
-            // Row 1: Colors + Types
-            GameObject row1 = new GameObject("Row1_ColorsTypes");
-            row1.transform.SetParent(brushPanel.transform, false);
-            RectTransform r1Rect = row1.AddComponent<RectTransform>();
-            r1Rect.sizeDelta = new Vector2(800, 60); // Wider container
-            HorizontalLayoutGroup r1Layout = row1.AddComponent<HorizontalLayoutGroup>();
-            r1Layout.childAlignment = TextAnchor.MiddleCenter;
-            r1Layout.spacing = 40; // Split Colors and Types
-
-            // Sub-group for Colors
-            GameObject colorGroup = new GameObject("ColorGroup");
-            colorGroup.transform.SetParent(row1.transform, false);
-            RectTransform colorRect = colorGroup.AddComponent<RectTransform>();
-            colorRect.sizeDelta = new Vector2(300, 50);
-            HorizontalLayoutGroup colorLayout = colorGroup.AddComponent<HorizontalLayoutGroup>();
+            // 3. Color Panel
+            GameObject colorPanel = CreateSubPanel(panelContainer, "ColorPanel");
+            HorizontalLayoutGroup colorLayout = colorPanel.AddComponent<HorizontalLayoutGroup>();
             colorLayout.childAlignment = TextAnchor.MiddleCenter;
-            colorLayout.spacing = 15;
-
-            // Colors
-            Color[] palette = { Color.black, Color.red, Color.blue, Color.green, new Color(1f, 0.5f, 0f) };
+            colorLayout.spacing = 20;
+            
+            Color[] palette = { Color.black, Color.red, new Color(1f, 0.8f, 0f), new Color(0.2f, 1f, 0.2f), new Color(0f, 0.8f, 1f), Color.blue, new Color(0.6f, 0f, 1f), new Color(1f, 0f, 0.5f) };
             Button[] colorBtns = new Button[palette.Length];
-            for(int i=0; i<palette.Length; i++) colorBtns[i] = CreateDotBtn(colorGroup, $"Col_{i}", 40, palette[i]);
+            for(int i=0; i<palette.Length; i++) colorBtns[i] = CreateDotBtn(colorPanel, $"Col_{i}", 40, palette[i]);
 
-            // Spacer (Empty Object)
-            GameObject spacer = new GameObject("Spacer");
-            spacer.transform.SetParent(row1.transform, false);
-            spacer.AddComponent<RectTransform>().sizeDelta = new Vector2(50, 0);
+            // --- Bottom Navigation Bar ---
+            GameObject navBar = new GameObject("NavBar");
+            navBar.transform.SetParent(root.transform, false);
+            RectTransform navRect = navBar.AddComponent<RectTransform>();
+            navRect.anchorMin = new Vector2(0, 0);
+            navRect.anchorMax = new Vector2(1, 0);
+            navRect.pivot = new Vector2(0.5f, 0);
+            navRect.sizeDelta = new Vector2(0, 80); // Height
 
-            // Sub-group for Types
-            GameObject typeGroup = new GameObject("TypeGroup");
-            typeGroup.transform.SetParent(row1.transform, false);
-            RectTransform typeRect = typeGroup.AddComponent<RectTransform>();
-            typeRect.sizeDelta = new Vector2(300, 50);
-            HorizontalLayoutGroup typeLayout = typeGroup.AddComponent<HorizontalLayoutGroup>();
-            typeLayout.childAlignment = TextAnchor.MiddleCenter;
-            typeLayout.spacing = 10;
+            Image navBg = navBar.AddComponent<Image>();
+            navBg.color = new Color(0.95f, 0.95f, 0.95f, 1f);
 
-            // Types
-            Button btnSoft = CreateTextBtn(typeGroup, "Type_Soft", "Soft");
-            Button btnHard = CreateTextBtn(typeGroup, "Type_Hard", "Hard");
-            Button btnMarker = CreateTextBtn(typeGroup, "Type_Marker", "Marker");
-            Button btnPencil = CreateTextBtn(typeGroup, "Type_Pencil", "Pencil");
-
-            // Row 2: Sizes
-            GameObject row2 = new GameObject("Row2_Sizes");
-            row2.transform.SetParent(brushPanel.transform, false);
-            RectTransform r2Rect = row2.AddComponent<RectTransform>();
-            r2Rect.sizeDelta = new Vector2(600, 60);
-            HorizontalLayoutGroup r2Layout = row2.AddComponent<HorizontalLayoutGroup>();
-            r2Layout.childAlignment = TextAnchor.MiddleCenter;
-            r2Layout.spacing = 30; // WIDER SPACING
-
-            Button[] brushSizes = new Button[5];
-            for(int i=0; i<5; i++) brushSizes[i] = CreateDotBtn(row2, $"Size_{i}", 20 + i*10, Color.black);
-
+            HorizontalLayoutGroup navLayout = navBar.AddComponent<HorizontalLayoutGroup>();
+            navLayout.childControlWidth = true;
+            navLayout.childForceExpandWidth = true;
+            navLayout.padding = new RectOffset(10, 10, 5, 5);
+            
+            var tabBrush = CreateNavTab(navBar, "Tab_Brush", "笔刷");
+            var tabEraser = CreateNavTab(navBar, "Tab_Eraser", "橡皮");
+            var tabSize = CreateNavTab(navBar, "Tab_Size", "大小");
+            var tabColor = CreateNavTab(navBar, "Tab_Color", "颜色");
 
             // --- Connect Script ---
             var toolbarScript = root.AddComponent<Features.Drawing.Presentation.UI.DrawingToolbar>();
             SerializedObject so = new SerializedObject(toolbarScript);
             
-            so.FindProperty("_renderer").objectReferenceValue = renderer;
-            so.FindProperty("_panelEraser").objectReferenceValue = eraserPanel;
-            so.FindProperty("_panelBrush").objectReferenceValue = brushPanel;
+            so.FindProperty("_appService").objectReferenceValue = appService;
             
-            so.FindProperty("_btnMainEraser").objectReferenceValue = btnEraser;
-            so.FindProperty("_btnMainBrush").objectReferenceValue = btnBrush;
-            so.FindProperty("_btnMainClear").objectReferenceValue = btnClear;
+            so.FindProperty("_btnUndo").objectReferenceValue = btnUndo;
+            so.FindProperty("_btnClear").objectReferenceValue = btnClear;
 
-            // Arrays
-            SerializedProperty spEraserSizes = so.FindProperty("_eraserSizeButtons");
-            spEraserSizes.arraySize = 5;
-            for(int i=0; i<5; i++) spEraserSizes.GetArrayElementAtIndex(i).objectReferenceValue = eraserSizes[i];
+            so.FindProperty("_tabBrush").objectReferenceValue = tabBrush;
+            so.FindProperty("_tabEraser").objectReferenceValue = tabEraser;
+            so.FindProperty("_tabSize").objectReferenceValue = tabSize;
+            so.FindProperty("_tabColor").objectReferenceValue = tabColor;
 
-            SerializedProperty spBrushSizes = so.FindProperty("_brushSizeButtons");
-            spBrushSizes.arraySize = 5;
-            for(int i=0; i<5; i++) spBrushSizes.GetArrayElementAtIndex(i).objectReferenceValue = brushSizes[i];
-
-            SerializedProperty spBrushColors = so.FindProperty("_brushColorButtons");
-            spBrushColors.arraySize = 5;
-            for(int i=0; i<5; i++) spBrushColors.GetArrayElementAtIndex(i).objectReferenceValue = colorBtns[i];
+            so.FindProperty("_panelBrush").objectReferenceValue = brushPanel;
+            so.FindProperty("_panelSize").objectReferenceValue = sizePanel;
+            so.FindProperty("_panelColor").objectReferenceValue = colorPanel;
 
             so.FindProperty("_btnTypeSoft").objectReferenceValue = btnSoft;
             so.FindProperty("_btnTypeHard").objectReferenceValue = btnHard;
             so.FindProperty("_btnTypeMarker").objectReferenceValue = btnMarker;
             so.FindProperty("_btnTypePencil").objectReferenceValue = btnPencil;
 
-            // Textures
-            string softPath = "Assets/SoftBrush.png";
-            string hardPath = "Assets/HardBrush.png";
-            string markerPath = "Assets/MarkerBrush.png";
-            string pencilPath = "Assets/PencilBrush.png";
+            SerializedProperty spSizeBtns = so.FindProperty("_sizeButtons");
+            spSizeBtns.arraySize = 5;
+            for(int i=0; i<5; i++) spSizeBtns.GetArrayElementAtIndex(i).objectReferenceValue = sizeBtns[i];
 
-            so.FindProperty("_softBrushTex").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Texture2D>(softPath);
-            so.FindProperty("_hardBrushTex").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Texture2D>(hardPath);
-            so.FindProperty("_markerBrushTex").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Texture2D>(markerPath);
-            so.FindProperty("_pencilBrushTex").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Texture2D>(pencilPath);
+            SerializedProperty spColorBtns = so.FindProperty("_colorButtons");
+            spColorBtns.arraySize = palette.Length;
+            for(int i=0; i<palette.Length; i++) spColorBtns.GetArrayElementAtIndex(i).objectReferenceValue = colorBtns[i];
+
+            string softPath = "Assets/Scripts/Features/Drawing/Domain/SoftBrush.asset";
+            string hardPath = "Assets/Scripts/Features/Drawing/Domain/HardBrush.asset";
+            string markerPath = "Assets/Scripts/Features/Drawing/Domain/MarkerBrush.asset";
+            string pencilPath = "Assets/Scripts/Features/Drawing/Domain/PencilBrush.asset";
+
+            so.FindProperty("_softBrushStrategy").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Features.Drawing.Domain.BrushStrategy>(softPath);
+            so.FindProperty("_hardBrushStrategy").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Features.Drawing.Domain.BrushStrategy>(hardPath);
+            so.FindProperty("_markerBrushStrategy").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Features.Drawing.Domain.BrushStrategy>(markerPath);
+            so.FindProperty("_pencilBrushStrategy").objectReferenceValue = AssetDatabase.LoadAssetAtPath<Features.Drawing.Domain.BrushStrategy>(pencilPath);
 
             so.ApplyModifiedProperties();
         }
@@ -298,19 +321,51 @@ namespace Editor
             panel.transform.SetParent(parent.transform, false);
             
             RectTransform rect = panel.AddComponent<RectTransform>();
-            rect.anchorMin = new Vector2(0.1f, 0);
-            rect.anchorMax = new Vector2(0.9f, 1);
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
             rect.offsetMin = Vector2.zero;
             rect.offsetMax = Vector2.zero;
 
-            Image bg = panel.AddComponent<Image>();
-            bg.color = new Color(1f, 1f, 1f, 0.9f); // Semi-transparent white
-            
-            // Add rounded corner mask if possible, or just standard rect
-            // For now standard rect.
-            
             panel.SetActive(false);
             return panel;
+        }
+
+        private static Button CreateNavTab(GameObject parent, string name, string text)
+        {
+            GameObject btnObj = new GameObject(name);
+            btnObj.transform.SetParent(parent.transform, false);
+            
+            Image img = btnObj.AddComponent<Image>();
+            img.color = Color.clear; // Transparent hit area
+
+            Button btn = btnObj.AddComponent<Button>();
+            
+            // Icon Placeholder (Circle)
+            GameObject iconObj = new GameObject("Icon");
+            iconObj.transform.SetParent(btnObj.transform, false);
+            RectTransform iconRect = iconObj.AddComponent<RectTransform>();
+            iconRect.sizeDelta = new Vector2(30, 30);
+            iconRect.anchoredPosition = new Vector2(0, 10);
+            
+            Image iconImg = iconObj.AddComponent<Image>();
+            iconImg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Knob.psd");
+            iconImg.color = Color.gray;
+
+            // Text Label
+            GameObject label = new GameObject("Label");
+            label.transform.SetParent(btnObj.transform, false);
+            RectTransform lRect = label.AddComponent<RectTransform>();
+            lRect.sizeDelta = new Vector2(100, 20);
+            lRect.anchoredPosition = new Vector2(0, -15);
+            
+            Text txt = label.AddComponent<Text>();
+            txt.text = text;
+            txt.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            txt.color = Color.black;
+            txt.alignment = TextAnchor.MiddleCenter;
+            txt.fontSize = 12;
+
+            return btn;
         }
 
         private static Button CreateIconBtn(GameObject parent, string name, Color color, string text)
@@ -327,23 +382,18 @@ namespace Editor
             Button btn = btnObj.AddComponent<Button>();
             btn.targetGraphic = img;
 
-            // Inner Icon/Text
             GameObject label = new GameObject("Label");
             label.transform.SetParent(btnObj.transform, false);
             RectTransform labelRect = label.AddComponent<RectTransform>();
             labelRect.anchorMin = Vector2.zero;
             labelRect.anchorMax = Vector2.one;
-            labelRect.offsetMin = new Vector2(5, 5);
-            labelRect.offsetMax = new Vector2(-5, -5);
-
+            
             Text txt = label.AddComponent<Text>();
             txt.text = text;
             txt.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
             txt.color = Color.black;
             txt.alignment = TextAnchor.MiddleCenter;
-            txt.resizeTextForBestFit = true;
-            txt.resizeTextMinSize = 10;
-            txt.resizeTextMaxSize = 20;
+            txt.fontSize = 10;
             
             return btn;
         }
@@ -358,14 +408,12 @@ namespace Editor
 
             Button btn = btnObj.AddComponent<Button>();
 
-            // The visible dot
             GameObject dot = new GameObject("Dot");
             dot.transform.SetParent(btnObj.transform, false);
             RectTransform dotRect = dot.AddComponent<RectTransform>();
             dotRect.sizeDelta = new Vector2(diameter, diameter);
             
             Image dotImg = dot.AddComponent<Image>();
-            // Use sprite knob for circle
             dotImg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Knob.psd");
             dotImg.color = color;
             
@@ -378,10 +426,12 @@ namespace Editor
             GameObject btnObj = new GameObject(name);
             btnObj.transform.SetParent(parent.transform, false);
             RectTransform rect = btnObj.AddComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(60, 40);
+            rect.sizeDelta = new Vector2(80, 40);
             
             Image bg = btnObj.AddComponent<Image>();
-            bg.color = new Color(0.82f, 0.82f, 0.82f, 1f); // Light Gray
+            bg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/UISprite.psd");
+            bg.type = Image.Type.Sliced;
+            bg.color = Color.white;
             
             Button btn = btnObj.AddComponent<Button>();
             
@@ -396,20 +446,19 @@ namespace Editor
             txt.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
             txt.color = Color.black;
             txt.alignment = TextAnchor.MiddleCenter;
+            txt.fontSize = 14;
             
             return btn;
         }
 
         private static Texture2D GeneratePencilTexture()
         {
-            // Pencil: Small, grainy, circular but noisy
-            int size = 64; // Smaller texture for pencil
+            int size = 64; 
             Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
             Color[] colors = new Color[size * size];
             Vector2 center = new Vector2(size / 2f, size / 2f);
             float radius = size / 2f;
             
-            float noiseScale = 50f;
             float offsetX = Random.Range(0f, 100f);
             float offsetY = Random.Range(0f, 100f);
 
@@ -426,19 +475,10 @@ namespace Editor
                     }
 
                     float normalizedDist = dist / radius;
-                    
-                    // Base alpha: Falloff
-                    // Pencil has a relatively hard core but fuzzy edges
                     float alpha = 1.0f - Mathf.SmoothStep(0.5f, 1.0f, normalizedDist);
-
-                    // Noise: High frequency noise for graphite grain
                     float noise = Mathf.PerlinNoise(x / 5f + offsetX, y / 5f + offsetY);
-                    
-                    // Modulate alpha by noise
-                    // Pencil strokes are never fully solid black, they have gaps
                     alpha *= Mathf.Lerp(0.2f, 1.0f, noise);
                     
-                    // Random salt-and-pepper noise for extra grain
                     if (Random.value > 0.9f) alpha *= 0.5f;
 
                     colors[y * size + x] = new Color(1, 1, 1, alpha);
@@ -464,7 +504,6 @@ namespace Editor
                 {
                     float dist = Vector2.Distance(new Vector2(x, y), center);
                     float alpha = 1f - Mathf.Clamp01(dist / radius);
-                    // Cubic ease out for softer edge
                     alpha = alpha * alpha * (3 - 2 * alpha); 
                     
                     colors[y * size + x] = new Color(1, 1, 1, alpha);
@@ -478,32 +517,35 @@ namespace Editor
 
         private static Texture2D GenerateHardCircleTexture()
         {
-            int size = 128;
+            int size = 256; // Increased resolution for better quality
             Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
-            // Important: Use Bilinear for smooth edges when scaled, 
-            // but if we want super sharp pixel art style we'd use Point.
-            // For standard "Hard" brush, Bilinear is better to avoid aliasing artifacts.
-            // Also need Clamp wrapping to avoid edge bleeding.
             tex.filterMode = FilterMode.Bilinear;
             tex.wrapMode = TextureWrapMode.Clamp;
             
             Color[] colors = new Color[size * size];
             Vector2 center = new Vector2(size / 2f, size / 2f);
-            float radius = size / 2f - 2f; // Leave 2px padding to avoid clipping
+            float radius = size / 2f - 4f; // Slight padding
 
             for (int y = 0; y < size; y++)
             {
                 for (int x = 0; x < size; x++)
                 {
                     float dist = Vector2.Distance(new Vector2(x, y), center);
-                    // Hard edge with slight AA (1.5 pixel falloff)
-                    // dist - radius > 0 means outside.
-                    // We want alpha 1 inside, alpha 0 outside.
-                    // smoothstep(edge0, edge1, x): returns 0 if x < edge0, 1 if x > edge1
-                    // We want: 1 if dist < radius, 0 if dist > radius + aa
                     
-                    // Inverse smoothstep for falloff
-                    float alpha = 1.0f - Mathf.SmoothStep(radius - 0.5f, radius + 1.0f, dist);
+                    // Simple Hard Edge
+                    // If inside radius, Alpha = 1. Else Alpha = 0.
+                    // We add a tiny anti-aliasing rim (1-2 pixels) to look decent but stay "hard".
+                    float alpha = 0f;
+                    
+                    if (dist < radius - 1.0f)
+                    {
+                        alpha = 1.0f;
+                    }
+                    else if (dist < radius + 1.0f)
+                    {
+                        // Anti-aliasing edge
+                        alpha = 1.0f - Mathf.InverseLerp(radius - 1.0f, radius + 1.0f, dist);
+                    }
                     
                     colors[y * size + x] = new Color(1, 1, 1, alpha);
                 }
@@ -516,13 +558,11 @@ namespace Editor
 
         private static Texture2D GenerateMarkerTexture()
         {
-            // Square-ish shape with noise
             int size = 128;
             Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
             Color[] colors = new Color[size * size];
             Vector2 center = new Vector2(size / 2f, size / 2f);
             
-            // Perlin noise offsets
             float noiseScale = 20f;
             float offsetX = Random.Range(0f, 100f);
             float offsetY = Random.Range(0f, 100f);
@@ -531,25 +571,13 @@ namespace Editor
             {
                 for (int x = 0; x < size; x++)
                 {
-                    // Box shape
                     float dx = Mathf.Abs(x - center.x) / (size / 2f);
                     float dy = Mathf.Abs(y - center.y) / (size / 2f);
-                    
-                    // Box SDF
-                    float dist = Mathf.Max(dx, dy); // 0 center, 1 edge
-                    
-                    // Add noise
+                    float dist = Mathf.Max(dx, dy); 
                     float noise = Mathf.PerlinNoise(x / noiseScale + offsetX, y / noiseScale + offsetY);
-                    
-                    // Combine: Box fade + noise texture
-                    // We want: Solid in center, fade at edges, texture throughout
-                    
-                    float alpha = 1.0f - Mathf.SmoothStep(0.7f, 1.0f, dist); // Fade out at edges
-                    
-                    // Texture modulation
+                    float alpha = 1.0f - Mathf.SmoothStep(0.7f, 1.0f, dist); 
                     alpha *= Mathf.Lerp(0.5f, 1.0f, noise); 
                     
-                    // Rough edges
                     float edgeNoise = Mathf.PerlinNoise(x / 5f, y / 5f) * 0.1f;
                     if (dist > 0.8f + edgeNoise) alpha *= 0.5f;
 

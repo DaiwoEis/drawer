@@ -98,13 +98,21 @@ namespace Features.Drawing.Presentation
                         }
 
                         // Interpolate
-                        float previousRemainder = _distanceAccumulator - dist;
-                        float nextPointDist = spacing - previousRemainder;
+                        // We need to walk forward from the last theoretical stamp position.
+                        // Ideally, we shouldn't modify _distanceAccumulator inside the loop destructively if we want precision.
+                        // But for simplicity:
                         
-                        while (nextPointDist <= dist)
+                        while (_distanceAccumulator >= spacing)
                         {
-                            // Draw point at `nextPointDist` from `_lastDrawPos`
-                            float t = nextPointDist / dist;
+                            _distanceAccumulator -= spacing;
+                            
+                            // The point is located at `spacing` distance "back" from the current accumulated front.
+                            // But since we just subtracted spacing, it means we are at `_distanceAccumulator` distance "past" the new stamp.
+                            // So the new stamp is at `dist - _distanceAccumulator` along the vector `dir` from `_lastDrawPos`.
+                            
+                            float d = dist - _distanceAccumulator;
+                            float t = d / dist;
+                            
                             Vector2 interpPos = Vector2.Lerp(_lastDrawPos.Value, currentPos, t);
                             float interpSize = Mathf.Lerp(_lastSize, currentSize, t);
                             
@@ -113,7 +121,6 @@ namespace Features.Drawing.Presentation
                             {
                                 if (RotationMode == BrushRotationMode.Follow)
                                 {
-                                    // Smooth transition
                                     _currentAngle = Mathf.LerpAngle(_currentAngle, targetAngle, 0.3f);
                                     drawAngle = _currentAngle;
                                 }
@@ -122,24 +129,11 @@ namespace Features.Drawing.Presentation
                                     drawAngle = targetAngle;
                                 }
                             }
-                            else
-                            {
-                                // No rotation needed, stay at 0
-                                drawAngle = 0f;
-                            }
-
-                            // Apply Jitter if configured
-                            if (AngleJitter > 0f)
-                            {
-                                drawAngle += Random.Range(-AngleJitter, AngleJitter);
-                            }
+                            
+                            if (AngleJitter > 0f) drawAngle += Random.Range(-AngleJitter, AngleJitter);
                             
                             outputBuffer.Add(new StampData(interpPos, interpSize, drawAngle));
-                            
-                            nextPointDist += spacing;
                         }
-                        
-                        _distanceAccumulator %= spacing;
                     }
                 }
                 else
