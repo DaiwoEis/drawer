@@ -37,9 +37,17 @@ namespace Editor
                 GameObject canvasObj = new GameObject("Canvas");
                 canvas = canvasObj.AddComponent<Canvas>();
                 canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                // PIXEL PERFECT: Ensure crisp rendering
+                canvas.pixelPerfect = true; 
+                
                 canvasObj.AddComponent<CanvasScaler>();
                 canvasObj.AddComponent<GraphicRaycaster>();
                 Undo.RegisterCreatedObjectUndo(canvasObj, "Create Canvas");
+            }
+            else
+            {
+                // Ensure existing canvas has Pixel Perfect enabled
+                canvas.pixelPerfect = true;
             }
             
             // Ensure Scaler is configured for High DPI
@@ -215,10 +223,14 @@ namespace Editor
             CanvasScaler scaler = canvas.GetComponent<CanvasScaler>();
             if (scaler == null) scaler = canvas.gameObject.AddComponent<CanvasScaler>();
 
+            // USER GUIDE 2): Scale With Screen Size + Match Width Or Height
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1080, 1920);
+            scaler.referenceResolution = new Vector2(1080, 1920); // Portrait base
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
-            scaler.matchWidthOrHeight = 0.5f;
+            scaler.matchWidthOrHeight = 0.5f; // Balanced match
+            
+            // Ensure Pixel Perfect is set on the Canvas component itself
+            canvas.pixelPerfect = true;
         }
 
         private static void SetupBrushAssets()
@@ -667,7 +679,10 @@ namespace Editor
             txt.font = GetTMPFont();
             txt.color = Color.black;
             txt.alignment = TextAlignmentOptions.Center;
-            txt.fontSize = 20;
+            
+            // USER GUIDE 1) & 3): Ensure large font size and no weird scaling
+            txt.fontSize = 24; // Increased from 20 for better clarity
+            txt.enableWordWrapping = false;
             
             return btn;
         }
