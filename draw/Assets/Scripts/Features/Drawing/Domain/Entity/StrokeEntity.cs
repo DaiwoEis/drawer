@@ -14,6 +14,7 @@ namespace Features.Drawing.Domain.Entity
         public ushort BrushId { get; private set; }
         public uint Seed { get; private set; }
         public bool IsEnded { get; private set; }
+        public float Size { get; private set; }
         
         // Color encoded as integer (RGBA) for simple serialization
         public uint ColorRGBA { get; private set; }
@@ -21,13 +22,14 @@ namespace Features.Drawing.Domain.Entity
         private readonly List<LogicPoint> _points;
         public IReadOnlyList<LogicPoint> Points => _points;
 
-        public StrokeEntity(uint id, ushort authorId, ushort brushId, uint seed, uint colorRGBA)
+        public StrokeEntity(uint id, ushort authorId, ushort brushId, uint seed, uint colorRGBA, float size)
         {
             Id = id;
             AuthorId = authorId;
             BrushId = brushId;
             Seed = seed;
             ColorRGBA = colorRGBA;
+            Size = size;
             _points = new List<LogicPoint>();
             IsEnded = false;
         }

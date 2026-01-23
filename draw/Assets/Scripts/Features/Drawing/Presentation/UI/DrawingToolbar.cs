@@ -17,6 +17,7 @@ namespace Features.Drawing.Presentation.UI
 
         // Top Bar Buttons
         [SerializeField] private Button _btnUndo;
+        [SerializeField] private Button _btnRedo;
         [SerializeField] private Button _btnClear;
 
         // Bottom Navigation Tabs
@@ -136,6 +137,29 @@ namespace Features.Drawing.Presentation.UI
             if (_appService != null)
             {
                 _appService.OnStrokeStarted -= OnStrokeStarted;
+            }
+        }
+
+        private void Update()
+        {
+            // Keyboard Shortcuts
+            bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.LeftCommand);
+            bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+
+            if (ctrl && Input.GetKeyDown(KeyCode.Z))
+            {
+                if (shift)
+                {
+                    _appService.Redo();
+                }
+                else
+                {
+                    _appService.Undo();
+                }
+            }
+            else if (ctrl && Input.GetKeyDown(KeyCode.Y))
+            {
+                _appService.Redo();
             }
         }
 
@@ -277,6 +301,11 @@ namespace Features.Drawing.Presentation.UI
         private void OnUndoClick()
         {
             _appService.Undo();
+        }
+
+        private void OnRedoClick()
+        {
+            _appService.Redo();
         }
 
         private void SetSize(float size)

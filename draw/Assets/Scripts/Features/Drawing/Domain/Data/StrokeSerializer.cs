@@ -78,8 +78,9 @@ namespace Features.Drawing.Domain.Data
                 ushort brushId = reader.ReadUInt16();
                 uint seed = reader.ReadUInt32();
                 uint color = reader.ReadUInt32();
+                float size = reader.ReadSingle();
 
-                var stroke = new StrokeEntity(id, authorId, brushId, seed, color);
+                var stroke = new StrokeEntity(id, authorId, brushId, seed, color, size);
 
                 // Points
                 int count = ReadVarInt(reader);

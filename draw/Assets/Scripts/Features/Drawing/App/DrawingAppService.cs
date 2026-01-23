@@ -51,6 +51,7 @@ namespace Features.Drawing.App
             public List<LogicPoint> Points;
         }
         private List<StrokeHistoryItem> _history = new List<StrokeHistoryItem>();
+        private List<StrokeHistoryItem> _redoHistory = new List<StrokeHistoryItem>();
         private StrokeHistoryItem _currentHistoryItem;
         private Texture2D _currentRuntimeTexture;
         private StrokeEntity _currentStroke;
@@ -176,6 +177,7 @@ namespace Features.Drawing.App
         public void ClearCanvas()
         {
             _history.Clear();
+            _redoHistory.Clear();
             _renderer?.ClearCanvas();
         }
 
@@ -192,7 +194,7 @@ namespace Features.Drawing.App
             uint id = (uint)Random.Range(0, int.MaxValue); // Simple random ID
             uint seed = (uint)Random.Range(0, int.MaxValue);
             uint colorInt = ColorToUInt(_currentColor);
-            _currentStroke = new StrokeEntity(id, 0, 0, seed, colorInt);
+            _currentStroke = new StrokeEntity(id, 0, 0, seed, colorInt, _currentSize);
 
             // Create History Item
             _currentHistoryItem = new StrokeHistoryItem
@@ -227,6 +229,9 @@ namespace Features.Drawing.App
                 _currentHistoryItem.Points.AddRange(_currentStroke.Points);
                 _history.Add(_currentHistoryItem);
                 _currentHistoryItem = null;
+                
+                // Clear Redo history when a new action is performed
+                _redoHistory.Clear();
             }
             
             // Spatial Indexing
@@ -237,7 +242,7 @@ namespace Features.Drawing.App
             Debug.Log($"[Stroke] Ended. ID: {_currentStroke.Id}, Points: {_currentStroke.Points.Count}, Bytes: {bytes.Length}. Avg: {bytes.Length / (float)_currentStroke.Points.Count:F2} b/point");
             
             // Limit history
-            if (_history.Count > 100)
+            if (_history.Count > 20)
             {
                 _history.RemoveAt(0);
             }
@@ -250,7 +255,25 @@ namespace Features.Drawing.App
             if (_history.Count == 0) return;
 
             // Remove last stroke
+            var item = _history[_history.Count - 1];
             _history.RemoveAt(_history.Count - 1);
+            
+            // Add to Redo history
+            _redoHistory.Add(item);
+            
+            RedrawHistory();
+        }
+
+        public void Redo()
+        {
+            if (_redoHistory.Count == 0) return;
+
+            // Remove last redo item
+            var item = _redoHistory[_redoHistory.Count - 1];
+            _redoHistory.RemoveAt(_redoHistory.Count - 1);
+            
+            // Add back to history
+            _history.Add(item);
             
             RedrawHistory();
         }
