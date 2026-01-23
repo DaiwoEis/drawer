@@ -124,6 +124,14 @@ namespace Editor
             
             SerializedObject soApp = new SerializedObject(appService);
             soApp.FindProperty("_concreteRenderer").objectReferenceValue = renderer;
+            
+            // Assign Eraser Strategy (Hard Brush)
+            BrushStrategy hardBrushStrategy = AssetDatabase.LoadAssetAtPath<BrushStrategy>("Assets/Scripts/Features/Drawing/Domain/HardBrush.asset");
+            if (hardBrushStrategy != null)
+            {
+                soApp.FindProperty("_eraserStrategy").objectReferenceValue = hardBrushStrategy;
+            }
+            
             soApp.ApplyModifiedProperties();
 
             // 6. Create Toolbar UI (Clean recreate)
@@ -206,6 +214,14 @@ namespace Editor
                     // 3. Re-link AppService to Renderer
                     SerializedObject soApp = new SerializedObject(appService);
                     soApp.FindProperty("_concreteRenderer").objectReferenceValue = renderer;
+                    
+                    // Assign Eraser Strategy (Hard Brush)
+                    BrushStrategy hardBrush = AssetDatabase.LoadAssetAtPath<BrushStrategy>("Assets/Scripts/Features/Drawing/Domain/HardBrush.asset");
+                    if (hardBrush != null)
+                    {
+                        soApp.FindProperty("_eraserStrategy").objectReferenceValue = hardBrush;
+                    }
+                    
                     soApp.ApplyModifiedProperties();
                 }
 

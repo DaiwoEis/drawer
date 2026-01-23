@@ -51,7 +51,7 @@ namespace Features.Drawing.Presentation.UI
         [SerializeField] private BrushStrategy _pencilBrushStrategy;
 
         // State
-        private float[] _sizePresets = new float[] { 20f, 40f, 80f, 120f, 160f };
+        private float[] _sizePresets = new float[] { 10f, 20f, 40f, 60f, 80f };
         private float _currentSize = 20f;
         private enum Tab { None, Brush, Eraser, Size, Color }
         private Tab _activeTab = Tab.None;
@@ -121,10 +121,10 @@ namespace Features.Drawing.Presentation.UI
             // Set a default brush strategy immediately so AppService has a valid state
             SetBrushType(0); // Select Soft Brush by default
             
-            // Default to second smallest size (index 1) as requested
-            if (_sizePresets.Length > 1)
+            // Default to first size (40f)
+            if (_sizePresets.Length > 0)
             {
-                _currentSize = _sizePresets[1];
+                _currentSize = _sizePresets[0];
             }
 
             SetSize(_currentSize); // Initialize size and UI
@@ -306,8 +306,8 @@ namespace Features.Drawing.Presentation.UI
             Transform icon = _tabSize.transform.Find("Icon");
             if (icon != null)
             {
-                // Map 20-160 to 0.4-1.0 scale range
-                float t = Mathf.InverseLerp(20f, 160f, _currentSize);
+                // Map 10-80 to 0.4-1.0 scale range
+                float t = Mathf.InverseLerp(10f, 80f, _currentSize);
                 float scale = Mathf.Lerp(0.4f, 1.0f, t);
                 icon.localScale = new Vector3(scale, scale, 1f);
             }

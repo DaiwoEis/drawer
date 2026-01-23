@@ -19,6 +19,7 @@ namespace Features.Drawing.App
     {
         [Header("References")]
         [SerializeField] private Features.Drawing.Presentation.CanvasRenderer _concreteRenderer; 
+        [SerializeField] private BrushStrategy _eraserStrategy; // Hard brush for eraser
         
         // State
         private Color _currentColor = Color.black;
@@ -143,6 +144,15 @@ namespace Features.Drawing.App
 
             if (_renderer != null)
             {
+                if (isEraser)
+                {
+                    // Force Eraser to use Hard Brush Strategy if available
+                    if (_eraserStrategy != null)
+                    {
+                        _renderer.ConfigureBrush(_eraserStrategy);
+                    }
+                }
+
                 _renderer.SetEraser(isEraser);
                 _renderer.SetBrushSize(targetSize);
                 
@@ -155,7 +165,7 @@ namespace Features.Drawing.App
                     // But wait, ConfigureBrush might regenerate it if we pass null.
                     // Let's check if we can store the last used runtime texture?
                     // For now, just re-applying strategy is better than broken blend modes.
-                    _renderer.ConfigureBrush(_currentStrategy, null);
+                    _renderer.ConfigureBrush(_currentStrategy, _currentRuntimeTexture); // Restore runtime texture if available
                     
                     // Also ensure color is restored (Eraser might have ignored it, but Renderer needs it back)
                     _renderer.SetBrushColor(_currentColor);

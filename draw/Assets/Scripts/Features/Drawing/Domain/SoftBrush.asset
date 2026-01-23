@@ -22,3 +22,5 @@ MonoBehaviour:
   BlendOp: 0
   SrcBlend: 1
   DstBlend: 10
+  UseProceduralSDF: 1
+  EdgeSoftness: 0.05
