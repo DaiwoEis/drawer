@@ -400,9 +400,13 @@ namespace Features.Drawing.Presentation
                 _brushMaterial.SetInt("_SrcBlend", (int)strategy.SrcBlend);
                 _brushMaterial.SetInt("_DstBlend", (int)strategy.DstBlend);
                 
+                // 4. Procedural SDF Settings
+                _brushMaterial.SetFloat("_UseProcedural", strategy.UseProceduralSDF ? 1.0f : 0.0f);
+                _brushMaterial.SetFloat("_EdgeSoftness", strategy.EdgeSoftness);
+
                 // Force update material keywords if needed (Standard shader relies on this, custom shader might not)
                 // But let's log to be sure
-                Debug.Log($"[CanvasRenderer] Applied Brush: {strategy.name}, Op: {strategy.BlendOp}, Tex: {(tex ? tex.name : "null")}");
+                Debug.Log($"[CanvasRenderer] Applied Brush: {strategy.name}, Op: {strategy.BlendOp}, SDF: {strategy.UseProceduralSDF}");
             }
         }
 

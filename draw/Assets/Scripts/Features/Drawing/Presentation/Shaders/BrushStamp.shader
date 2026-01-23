@@ -47,6 +47,8 @@ Shader "Drawing/BrushStamp"
             sampler2D _MainTex;
             float4 _MainTex_ST;
             fixed4 _Color;
+            float _UseProcedural;
+            float _EdgeSoftness;
 
             v2f vert (appdata v)
             {

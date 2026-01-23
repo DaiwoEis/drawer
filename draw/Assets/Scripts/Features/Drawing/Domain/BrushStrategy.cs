@@ -30,5 +30,13 @@ namespace Features.Drawing.Domain
         public BlendOp BlendOp = BlendOp.Add;
         public BlendMode SrcBlend = BlendMode.One;
         public BlendMode DstBlend = BlendMode.OneMinusSrcAlpha;
+
+        [Header("Procedural SDF")]
+        [Tooltip("Use shader-based SDF for perfect circles instead of texture. Overrides MainTexture.")]
+        public bool UseProceduralSDF = true;
+
+        [Range(0.001f, 0.5f)]
+        [Tooltip("Softness of the brush edge in SDF mode. 0.001 is hard, 0.5 is very soft.")]
+        public float EdgeSoftness = 0.05f;
     }
 }
