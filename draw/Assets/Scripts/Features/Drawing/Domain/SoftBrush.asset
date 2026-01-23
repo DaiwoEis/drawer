@@ -15,9 +15,10 @@ MonoBehaviour:
   MainTexture: {fileID: 2800000, guid: df2c379181eb64e0baa8bb5c011873d5, type: 3}
   UseRuntimeGeneration: 0
   SpacingRatio: 0.15
+  SizeMultiplier: 1.4
   RotationMode: 0
   AngleJitter: 0
-  Opacity: 0.5
+  Opacity: 1
   BlendOp: 0
   SrcBlend: 1
   DstBlend: 10

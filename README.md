@@ -51,6 +51,13 @@ Assets/Scripts/
 │       └── Service/      # 纯逻辑服务 (如平滑算法)
 ```
 
+## 🤖 AI 助手集成 (MCP)
+
+本项目集成了 [Unity MCP](https://github.com/CoplayDev/unity-mcp)，允许 AI 助手直接与 Unity 编辑器交互。
+
+*   **详细指南**: [Docs/MCP_Integration.md](Docs/MCP_Integration.md)
+*   **快速开始**: 打开 Unity -> Window -> MCP for Unity -> Start Server。
+
 ## 🏗️ 架构与核心模块
 
 ### 1. 应用层 (`DrawingAppService.cs`)

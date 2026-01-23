@@ -11,9 +11,9 @@ namespace Editor
 {
     public class SceneSetupTool
     {
-        private const float NAV_HEIGHT = 220f; // Much taller
-        private const float PANEL_HEIGHT = 180f; // Taller panels
-        private const float TOP_BAR_HEIGHT = 100f;
+        private const float NAV_HEIGHT = 160f; // Increased for visibility
+        private const float PANEL_HEIGHT = 180f; // Increased for visibility
+        private const float TOP_BAR_HEIGHT = 120f; // Increased for visibility
 
         [MenuItem("Drawing/Setup Scene (One Click)")]
         public static void SetupScene()
@@ -224,10 +224,14 @@ namespace Editor
             if (scaler == null) scaler = canvas.gameObject.AddComponent<CanvasScaler>();
 
             // USER GUIDE 2): Scale With Screen Size + Match Width Or Height
+            // ADAPTATION SCHEME:
+            // We use a reference resolution of 1080x1920 (Portrait Standard).
+            // MatchWidthOrHeight = 0.5 ensures balanced scaling on both Phones (Portrait) and Tablets/PC (Landscape).
+            // UI elements have been upscaled (Icons 60px, Nav 160px) to ensure visibility on high-res screens.
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1080, 1920); // Portrait base
+            scaler.referenceResolution = new Vector2(1080, 1920); 
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
-            scaler.matchWidthOrHeight = 0.5f; // Balanced match
+            scaler.matchWidthOrHeight = 0.5f; 
             
             // Ensure Pixel Perfect is set on the Canvas component itself
             canvas.pixelPerfect = true;
@@ -270,16 +274,16 @@ namespace Editor
 
             // 3. Configure Strategies
             string domainPath = "Assets/Scripts/Features/Drawing/Domain";
-            ConfigureStrategy(domainPath + "/SoftBrush.asset", softTex, 0.5f, 0.15f, BlendOp.Add, BrushRotationMode.None);
-            ConfigureStrategy(domainPath + "/HardBrush.asset", hardTex, 1.0f, 0.05f, BlendOp.Add, BrushRotationMode.None, false); // DISABLED RUNTIME GENERATION
-            ConfigureStrategy(domainPath + "/MarkerBrush.asset", markerTex, 0.8f, 0.1f, BlendOp.Add, BrushRotationMode.Fixed);
-            ConfigureStrategy(domainPath + "/PencilBrush.asset", pencilTex, 0.6f, 0.2f, BlendOp.Add, BrushRotationMode.None, false, 360f);
+            ConfigureStrategy(domainPath + "/SoftBrush.asset", softTex, 1.0f, 0.15f, BlendOp.Add, BrushRotationMode.None, 1.4f);
+            ConfigureStrategy(domainPath + "/HardBrush.asset", hardTex, 1.0f, 0.05f, BlendOp.Add, BrushRotationMode.None, 1.0f, false); // DISABLED RUNTIME GENERATION
+            ConfigureStrategy(domainPath + "/MarkerBrush.asset", markerTex, 0.9f, 0.1f, BlendOp.Add, BrushRotationMode.Fixed, 1.1f);
+            ConfigureStrategy(domainPath + "/PencilBrush.asset", pencilTex, 1.0f, 0.2f, BlendOp.Add, BrushRotationMode.None, 1.5f, false, 360f);
             
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
         }
 
-        private static void ConfigureStrategy(string path, Texture2D tex, float opacity, float spacing, BlendOp op, BrushRotationMode rot, bool runtime = false, float jitter = 0f)
+        private static void ConfigureStrategy(string path, Texture2D tex, float opacity, float spacing, BlendOp op, BrushRotationMode rot, float sizeMultiplier = 1.0f, bool runtime = false, float jitter = 0f)
         {
             BrushStrategy strategy = AssetDatabase.LoadAssetAtPath<BrushStrategy>(path);
             if (strategy == null)
@@ -293,6 +297,7 @@ namespace Editor
             strategy.SpacingRatio = spacing;
             strategy.BlendOp = op;
             strategy.RotationMode = rot;
+            strategy.SizeMultiplier = sizeMultiplier;
             strategy.UseRuntimeGeneration = runtime;
             strategy.AngleJitter = jitter;
             
@@ -418,17 +423,26 @@ namespace Editor
             panelRect.anchorMin = new Vector2(0, 0);
             panelRect.anchorMax = new Vector2(1, 0);
             panelRect.pivot = new Vector2(0.5f, 0);
-            panelRect.anchoredPosition = new Vector2(0, NAV_HEIGHT); // Above taller nav bar
-            panelRect.sizeDelta = new Vector2(0, PANEL_HEIGHT); 
-
+            panelRect.anchoredPosition = new Vector2(0, NAV_HEIGHT + 10); // Floating slightly above
+            panelRect.sizeDelta = new Vector2(-40, PANEL_HEIGHT); // Padding on sides
+            
             Image panelBg = panelContainer.AddComponent<Image>();
-            panelBg.color = new Color(1, 1, 1, 0.95f); // Almost opaque
+            panelBg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
+            panelBg.type = Image.Type.Sliced;
+            panelBg.color = new Color(1, 1, 1, 0.98f); 
+            
+            // Add Shadow component if available (UnityEngine.UI.Shadow)
+            // Since we can't easily add Shadow via code without standard assets sometimes, we skip or add outline.
+            // Let's just keep it clean.
+            Outline panelOutline = panelContainer.AddComponent<Outline>();
+            panelOutline.effectColor = new Color(0.8f, 0.8f, 0.8f, 0.5f);
+            panelOutline.effectDistance = new Vector2(0, -2);
 
             // 1. Brush Panel
             GameObject brushPanel = CreateSubPanel(panelContainer, "BrushPanel");
             HorizontalLayoutGroup brushLayout = brushPanel.AddComponent<HorizontalLayoutGroup>();
             brushLayout.childAlignment = TextAnchor.MiddleCenter;
-            brushLayout.spacing = 50;
+            brushLayout.spacing = 30;
             
             Button btnSoft = CreateIconBtn(brushPanel, "Type_Soft", Color.gray, "Soft");
             Button btnHard = CreateIconBtn(brushPanel, "Type_Hard", Color.black, "Hard");
@@ -439,20 +453,20 @@ namespace Editor
             GameObject sizePanel = CreateSubPanel(panelContainer, "SizePanel");
             HorizontalLayoutGroup sizeLayout = sizePanel.AddComponent<HorizontalLayoutGroup>();
             sizeLayout.childAlignment = TextAnchor.MiddleCenter;
-            sizeLayout.spacing = 60;
+            sizeLayout.spacing = 40;
             
             Button[] sizeBtns = new Button[5];
-            for(int i=0; i<5; i++) sizeBtns[i] = CreateDotBtn(sizePanel, $"Size_{i}", 30 + i*20, Color.black);
+            for(int i=0; i<5; i++) sizeBtns[i] = CreateDotBtn(sizePanel, $"Size_{i}", 20 + i*15, Color.black);
 
             // 3. Color Panel
             GameObject colorPanel = CreateSubPanel(panelContainer, "ColorPanel");
             HorizontalLayoutGroup colorLayout = colorPanel.AddComponent<HorizontalLayoutGroup>();
             colorLayout.childAlignment = TextAnchor.MiddleCenter;
-            colorLayout.spacing = 30;
+            colorLayout.spacing = 20;
             
             Color[] palette = { Color.black, Color.red, new Color(1f, 0.8f, 0f), new Color(0.2f, 1f, 0.2f), new Color(0f, 0.8f, 1f), Color.blue, new Color(0.6f, 0f, 1f), new Color(1f, 0f, 0.5f) };
             Button[] colorBtns = new Button[palette.Length];
-            for(int i=0; i<palette.Length; i++) colorBtns[i] = CreateDotBtn(colorPanel, $"Col_{i}", 80, palette[i]);
+            for(int i=0; i<palette.Length; i++) colorBtns[i] = CreateDotBtn(colorPanel, $"Col_{i}", 60, palette[i]);
 
             // --- Bottom Navigation Bar ---
             GameObject navBar = new GameObject("NavBar");
@@ -461,17 +475,26 @@ namespace Editor
             navRect.anchorMin = new Vector2(0, 0);
             navRect.anchorMax = new Vector2(1, 0);
             navRect.pivot = new Vector2(0.5f, 0);
-            navRect.sizeDelta = new Vector2(0, NAV_HEIGHT); // Height increased
+            navRect.sizeDelta = new Vector2(0, NAV_HEIGHT);
 
             Image navBg = navBar.AddComponent<Image>();
-            navBg.color = new Color(0.95f, 0.95f, 0.95f, 1f);
+            navBg.color = new Color(0.98f, 0.98f, 0.98f, 1f);
             
-            // Add shadow/border to top of navbar if possible, or just simple color
-            
+            // Top Border Shadow
+            GameObject shadow = new GameObject("Shadow");
+            shadow.transform.SetParent(navBar.transform, false);
+            RectTransform shadowRect = shadow.AddComponent<RectTransform>();
+            shadowRect.anchorMin = new Vector2(0, 1);
+            shadowRect.anchorMax = new Vector2(1, 1);
+            shadowRect.sizeDelta = new Vector2(0, 2); // 2px line
+            shadowRect.anchoredPosition = new Vector2(0, 1);
+            Image shadowImg = shadow.AddComponent<Image>();
+            shadowImg.color = new Color(0, 0, 0, 0.1f);
+
             HorizontalLayoutGroup navLayout = navBar.AddComponent<HorizontalLayoutGroup>();
             navLayout.childControlWidth = true;
             navLayout.childForceExpandWidth = true;
-            navLayout.padding = new RectOffset(20, 20, 10, 10);
+            navLayout.padding = new RectOffset(10, 10, 5, 5);
             
             var tabBrush = CreateNavTab(navBar, "Tab_Brush", "Brush");
             var tabEraser = CreateNavTab(navBar, "Tab_Eraser", "Eraser");
@@ -563,68 +586,104 @@ namespace Editor
             GameObject btnObj = new GameObject(name);
             btnObj.transform.SetParent(parent.transform, false);
             
+            // Background for selection state
             Image img = btnObj.AddComponent<Image>();
-            img.color = Color.clear; // Transparent hit area
+            img.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
+            img.type = Image.Type.Sliced;
+            img.color = Color.clear; 
 
             Button btn = btnObj.AddComponent<Button>();
+            btn.targetGraphic = img;
             
-            // Icon Placeholder (Circle)
+            // Icon Placeholder (Circle/Rounded)
             GameObject iconObj = new GameObject("Icon");
             iconObj.transform.SetParent(btnObj.transform, false);
             RectTransform iconRect = iconObj.AddComponent<RectTransform>();
-            iconRect.sizeDelta = new Vector2(80, 80); // Bigger Icon
+            iconRect.sizeDelta = new Vector2(60, 60); // Larger Icon (was 40)
             iconRect.anchoredPosition = new Vector2(0, 20);
             
             Image iconImg = iconObj.AddComponent<Image>();
             iconImg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Knob.psd");
             iconImg.color = Color.gray;
 
+            // Shadow/Depth for Icon
+            Outline outline = iconObj.AddComponent<Outline>();
+            outline.effectColor = new Color(0,0,0,0.1f);
+            outline.effectDistance = new Vector2(1, -1);
+
             // Text Label
             GameObject label = new GameObject("Label");
             label.transform.SetParent(btnObj.transform, false);
             RectTransform lRect = label.AddComponent<RectTransform>();
-            lRect.sizeDelta = new Vector2(150, 60); // Increased height to prevent clipping
-            lRect.anchoredPosition = new Vector2(0, -40);
+            lRect.sizeDelta = new Vector2(180, 50); 
+            lRect.anchoredPosition = new Vector2(0, -35);
             
             TextMeshProUGUI txt = label.AddComponent<TextMeshProUGUI>();
             txt.text = text;
             txt.font = GetTMPFont();
-            txt.color = Color.black;
+            txt.color = Color.gray;
             txt.alignment = TextAlignmentOptions.Center;
-            txt.overflowMode = TextOverflowModes.Overflow; // Ensure text shows even if bounds are tight
-            txt.fontSize = 36; // Bigger Text (was 24)
+            txt.overflowMode = TextOverflowModes.Overflow; 
+            txt.fontSize = 28; // Larger Text (was 20)
+            txt.fontStyle = FontStyles.Bold; 
 
             return btn;
         }
 
         private static Button CreateIconBtn(GameObject parent, string name, Color color, string text)
         {
-            GameObject btnObj = new GameObject(name);
-            btnObj.transform.SetParent(parent.transform, false);
-            
-            RectTransform rect = btnObj.AddComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(120, 120); // Bigger Button (was 100)
+            GameObject container = new GameObject(name);
+            container.transform.SetParent(parent.transform, false);
+            RectTransform containerRect = container.AddComponent<RectTransform>();
+            containerRect.sizeDelta = new Vector2(120, 130); // Larger (was 100x110)
 
+            // 1. Shadow (Bottom Layer)
+            GameObject shadowObj = new GameObject("Shadow");
+            shadowObj.transform.SetParent(container.transform, false);
+            RectTransform shadowRect = shadowObj.AddComponent<RectTransform>();
+            shadowRect.anchorMin = Vector2.zero;
+            shadowRect.anchorMax = Vector2.one;
+            shadowRect.offsetMin = new Vector2(0, 0); 
+            shadowRect.offsetMax = new Vector2(0, -8); // Deeper shadow
+            
+            Image shadowImg = shadowObj.AddComponent<Image>();
+            shadowImg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
+            shadowImg.type = Image.Type.Sliced;
+            shadowImg.color = new Color(0.7f, 0.7f, 0.7f); 
+
+            // 2. Main Button (Top Layer)
+            GameObject btnObj = new GameObject("ButtonVisual");
+            btnObj.transform.SetParent(container.transform, false);
+            RectTransform btnRect = btnObj.AddComponent<RectTransform>();
+            btnRect.anchorMin = Vector2.zero;
+            btnRect.anchorMax = Vector2.one;
+            btnRect.offsetMin = new Vector2(0, 8); // Shift up
+            btnRect.offsetMax = Vector2.zero;
+            
             Image img = btnObj.AddComponent<Image>();
-            img.color = new Color(0.9f, 0.9f, 0.9f); // Bg
+            img.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
+            img.type = Image.Type.Sliced;
+            img.color = Color.white; 
 
             Button btn = btnObj.AddComponent<Button>();
             btn.targetGraphic = img;
 
+            // 3. Label
             GameObject label = new GameObject("Label");
             label.transform.SetParent(btnObj.transform, false);
             RectTransform labelRect = label.AddComponent<RectTransform>();
             labelRect.anchorMin = Vector2.zero;
             labelRect.anchorMax = Vector2.one;
             labelRect.offsetMin = Vector2.zero;
-            labelRect.offsetMax = Vector2.zero; // Ensure it stretches
+            labelRect.offsetMax = Vector2.zero; 
             
             TextMeshProUGUI txt = label.AddComponent<TextMeshProUGUI>();
             txt.text = text;
             txt.font = GetTMPFont();
-            txt.color = Color.black;
+            txt.color = color; 
             txt.alignment = TextAlignmentOptions.Center;
-            txt.fontSize = 28; // Bigger Text (was 18)
+            txt.fontSize = 28; // Larger (was 24)
+            txt.fontStyle = FontStyles.Bold;
             
             return btn;
         }
@@ -635,10 +694,22 @@ namespace Editor
             btnObj.transform.SetParent(parent.transform, false);
             
             RectTransform rect = btnObj.AddComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(100, 100); // Touch target
+            rect.sizeDelta = new Vector2(100, 100); // Touch target (was 80)
 
             Button btn = btnObj.AddComponent<Button>();
 
+            // Shadow Dot
+            GameObject shadow = new GameObject("Shadow");
+            shadow.transform.SetParent(btnObj.transform, false);
+            RectTransform shadowRect = shadow.AddComponent<RectTransform>();
+            shadowRect.sizeDelta = new Vector2(diameter, diameter);
+            shadowRect.anchoredPosition = new Vector2(0, -5); // Deeper shadow
+            
+            Image shadowImg = shadow.AddComponent<Image>();
+            shadowImg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Knob.psd");
+            shadowImg.color = new Color(0,0,0,0.2f);
+
+            // Main Dot
             GameObject dot = new GameObject("Dot");
             dot.transform.SetParent(btnObj.transform, false);
             RectTransform dotRect = dot.AddComponent<RectTransform>();
@@ -647,6 +718,11 @@ namespace Editor
             Image dotImg = dot.AddComponent<Image>();
             dotImg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Knob.psd");
             dotImg.color = color;
+            
+            // White Border for Color/Size Dots to make them pop
+            Outline outline = dot.AddComponent<Outline>();
+            outline.effectColor = new Color(1,1,1,0.5f);
+            outline.effectDistance = new Vector2(1, -1);
             
             btn.targetGraphic = dotImg;
             return btn;
@@ -657,14 +733,15 @@ namespace Editor
             GameObject btnObj = new GameObject(name);
             btnObj.transform.SetParent(parent.transform, false);
             RectTransform rect = btnObj.AddComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(120, 60); // Bigger Top Buttons
+            rect.sizeDelta = new Vector2(140, 70); // Larger pill shape (was 100x50)
             
             Image bg = btnObj.AddComponent<Image>();
-            bg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/UISprite.psd");
+            bg.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd"); // Rounded
             bg.type = Image.Type.Sliced;
-            bg.color = Color.white;
+            bg.color = new Color(0.9f, 0.9f, 0.95f); // Soft Blue-ish Gray
             
             Button btn = btnObj.AddComponent<Button>();
+            btn.targetGraphic = bg;
             
             GameObject label = new GameObject("Label");
             label.transform.SetParent(btnObj.transform, false);
@@ -672,17 +749,15 @@ namespace Editor
             lRect.anchorMin = Vector2.zero;
             lRect.anchorMax = Vector2.one;
             lRect.offsetMin = Vector2.zero;
-            lRect.offsetMax = Vector2.zero; // Ensure it stretches
+            lRect.offsetMax = Vector2.zero; 
             
             TextMeshProUGUI txt = label.AddComponent<TextMeshProUGUI>();
             txt.text = text;
             txt.font = GetTMPFont();
-            txt.color = Color.black;
+            txt.color = new Color(0.3f, 0.3f, 0.4f);
             txt.alignment = TextAlignmentOptions.Center;
-            
-            // USER GUIDE 1) & 3): Ensure large font size and no weird scaling
-            txt.fontSize = 24; // Increased from 20 for better clarity
-            txt.enableWordWrapping = false;
+            txt.fontSize = 28; // Larger Text (was 20)
+            txt.fontStyle = FontStyles.Bold;
             
             return btn;
         }
@@ -753,40 +828,35 @@ namespace Editor
 
         private static Texture2D GenerateHardCircleTexture()
         {
-            int size = 256; // Increased resolution for better quality
+            int size = 256;
             Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
             tex.filterMode = FilterMode.Bilinear;
             tex.wrapMode = TextureWrapMode.Clamp;
-            
             Color[] colors = new Color[size * size];
             Vector2 center = new Vector2(size / 2f, size / 2f);
-            float radius = size / 2f - 4f; // Slight padding
-
+            float radius = size / 2f - 4f;
             for (int y = 0; y < size; y++)
             {
                 for (int x = 0; x < size; x++)
                 {
                     float dist = Vector2.Distance(new Vector2(x, y), center);
-                    
-                    // Simple Hard Edge
-                    // If inside radius, Alpha = 1. Else Alpha = 0.
-                    // We add a tiny anti-aliasing rim (1-2 pixels) to look decent but stay "hard".
                     float alpha = 0f;
                     
-                    if (dist < radius - 1.0f)
-                    {
-                        alpha = 1.0f;
+                    // Improved Anti-Aliasing: Wider transition + SmoothStep
+                    float edgeWidth = 2.0f; 
+                    if (dist < radius - edgeWidth) 
+                    { 
+                        alpha = 1.0f; 
                     }
                     else if (dist < radius + 1.0f)
                     {
-                        // Anti-aliasing edge
-                        alpha = 1.0f - Mathf.InverseLerp(radius - 1.0f, radius + 1.0f, dist);
+                        // Smooth transition from 1 to 0
+                        float t = Mathf.InverseLerp(radius - edgeWidth, radius + 1.0f, dist);
+                        alpha = Mathf.SmoothStep(1.0f, 0.0f, t);
                     }
-                    
                     colors[y * size + x] = new Color(1, 1, 1, alpha);
                 }
             }
-            
             tex.SetPixels(colors);
             tex.Apply();
             return tex;

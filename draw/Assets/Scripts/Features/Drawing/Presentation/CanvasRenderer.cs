@@ -37,6 +37,10 @@ namespace Features.Drawing.Presentation
         [SerializeField] private float _brushOpacity = 1.0f; // 0-1
         [SerializeField] private BrushRotationMode _rotationMode = BrushRotationMode.None;
 
+        // Size Management
+        private float _baseBrushSize = 50.0f; // Raw size from logic
+        private float _sizeMultiplier = 1.0f; // From strategy
+
         private RenderTexture _activeRT;
         private Material _brushMaterial;
         private CommandBuffer _cmd;
@@ -333,8 +337,9 @@ namespace Features.Drawing.Presentation
 
         public void SetBrushSize(float size)
         {
-            Debug.Log($"[CanvasRenderer] SetBrushSize: {size}");
-            _brushSize = Mathf.Max(1.0f, size);
+            // Debug.Log($"[CanvasRenderer] SetBrushSize: {size}");
+            _baseBrushSize = Mathf.Max(1.0f, size);
+            _brushSize = _baseBrushSize * _sizeMultiplier;
         }
 
         public void SetBrushColor(Color color)
@@ -375,6 +380,11 @@ namespace Features.Drawing.Presentation
             // Usually Opacity 0 means invisible. Let's assume strategy is correct but debug if it's suspicious.
             _brushOpacity = strategy.Opacity;
             _rotationMode = strategy.RotationMode;
+            
+            // Apply Size Multiplier
+            _sizeMultiplier = strategy.SizeMultiplier;
+            // Recalculate current effective size immediately
+            _brushSize = _baseBrushSize * _sizeMultiplier;
             
             // CRITICAL: Ensure _stampGenerator is initialized before accessing
             if (_stampGenerator == null) _stampGenerator = new StrokeStampGenerator();

@@ -18,6 +18,9 @@ namespace Features.Drawing.Domain
         [Range(0.001f, 1.0f)]
         public float SpacingRatio = 0.15f;
         
+        [Tooltip("Multiplier for the brush size to compensate for visual differences (e.g. soft brushes looking smaller).")]
+        public float SizeMultiplier = 1.0f;
+
         public BrushRotationMode RotationMode = BrushRotationMode.None;
         
         [Range(0f, 360f)]

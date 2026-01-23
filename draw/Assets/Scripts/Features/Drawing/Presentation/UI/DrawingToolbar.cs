@@ -52,9 +52,11 @@ namespace Features.Drawing.Presentation.UI
 
         // State
         private float[] _sizePresets = new float[] { 20f, 40f, 80f, 120f, 160f };
+        private float _currentSize = 20f;
         private enum Tab { None, Brush, Eraser, Size, Color }
         private Tab _activeTab = Tab.None;
         private bool _isEraserMode = false;
+        private Color _currentUiColor = Color.black; // Default to black
 
         private void Start()
         {
@@ -118,6 +120,14 @@ namespace Features.Drawing.Presentation.UI
             // Default State
             // Set a default brush strategy immediately so AppService has a valid state
             SetBrushType(0); // Select Soft Brush by default
+            
+            // Default to second smallest size (index 1) as requested
+            if (_sizePresets.Length > 1)
+            {
+                _currentSize = _sizePresets[1];
+            }
+
+            SetSize(_currentSize); // Initialize size and UI
             SwitchTab(Tab.Brush);
         }
 
@@ -219,13 +229,20 @@ namespace Features.Drawing.Presentation.UI
         private void SetTabColor(Button btn, bool isActive)
         {
             if (btn == null) return;
+            
+            // Use current selected color for Brush-related modes, and Blue for Eraser mode
+            Color themeColor = _isEraserMode ? new Color(0.2f, 0.6f, 1f) : _currentUiColor;
+            
+            Color activeColor = themeColor;
+            Color inactiveColor = Color.gray;
+
             Transform icon = btn.transform.Find("Icon");
             if (icon != null)
             {
                 Image img = icon.GetComponent<Image>();
                 if (img != null)
                 {
-                    img.color = isActive ? Color.black : Color.gray;
+                    img.color = isActive ? activeColor : inactiveColor;
                 }
             }
             
@@ -235,8 +252,16 @@ namespace Features.Drawing.Presentation.UI
                 TextMeshProUGUI txt = label.GetComponent<TextMeshProUGUI>();
                 if (txt != null)
                 {
-                    txt.color = isActive ? Color.black : Color.gray;
+                    txt.color = isActive ? activeColor : inactiveColor;
                 }
+            }
+            
+            // Optional: Tint background slightly
+            Image bg = btn.GetComponent<Image>();
+            if (bg != null)
+            {
+                // Subtle blue tint for active tab background
+                bg.color = isActive ? new Color(0.2f, 0.6f, 1f, 0.1f) : Color.clear;
             }
         }
 
@@ -256,17 +281,51 @@ namespace Features.Drawing.Presentation.UI
 
         private void SetSize(float size)
         {
+            _currentSize = size;
             _appService.SetSize(size);
-            Debug.Log($"Size set to: {size}");
+            UpdateSizeTabDisplay();
+            // Debug.Log($"Size set to: {size}");
+        }
+
+        private void UpdateSizeTabDisplay()
+        {
+            if (_tabSize == null) return;
+            
+            // Update Text to show numerical value
+            Transform label = _tabSize.transform.Find("Label");
+            if (label != null)
+            {
+                TextMeshProUGUI txt = label.GetComponent<TextMeshProUGUI>();
+                if (txt != null)
+                {
+                    txt.text = $"{_currentSize:F0}"; // e.g. "20"
+                }
+            }
+
+            // Update Icon Scale to reflect size visually
+            Transform icon = _tabSize.transform.Find("Icon");
+            if (icon != null)
+            {
+                // Map 20-160 to 0.4-1.0 scale range
+                float t = Mathf.InverseLerp(20f, 160f, _currentSize);
+                float scale = Mathf.Lerp(0.4f, 1.0f, t);
+                icon.localScale = new Vector3(scale, scale, 1f);
+            }
         }
 
         private void SetColor(Color c)
         {
             _appService.SetColor(c);
+            _currentUiColor = c;
+            
             // If we set color, we probably want to switch back to brush mode if we were in eraser
             if (_isEraserMode)
             {
                 SwitchTab(Tab.Brush);
+            }
+            else
+            {
+                UpdateTabVisuals();
             }
         }
 
