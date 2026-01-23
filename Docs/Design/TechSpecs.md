@@ -138,6 +138,7 @@ Assets/Scripts/Features/Drawing/
 ## 7. 未来路线图与优化 (Future Roadmap & Optimization)
 
 ### 已完成 (Completed) ✅
+*   **SDF 抗锯齿笔刷 (SDF Anti-aliasing Brush)**: 基于 Signed Distance Field 的程序化圆生成，彻底消除缩放锯齿。
 *   **四叉树空间索引 (QuadTree Spatial Indexing)**: 已集成 `StrokeSpatialIndex`，支持高效的空间查询。
 *   **GPU 加速 (GPU Acceleration)**: 已实现 `Compute Shader` 笔触生成，支持混合渲染管线（Hybrid Rendering Pipeline）。
 *   **二进制协议 (Binary Protocol)**: 已实现基于 VarInt 和增量编码（Delta Encoding）的 `StrokeSerializer`，平均单点 < 5 字节。

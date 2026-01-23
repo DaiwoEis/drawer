@@ -90,6 +90,7 @@ Assets/Scripts/
 3.  将纹理图片赋值给配置文件的 `Main Texture` 字段。
 4.  调整参数：
     *   **Spacing Ratio**: 决定盖章的密度。值越低线条越连续平滑，值越高则形成虚线效果。
+    *   **Procedural SDF**: 勾选 `Use Procedural SDF` 可启用完美圆形模式（忽略贴图），并通过 `Edge Softness` 调整边缘柔和度。
     *   **Blend Mode**: 普通笔刷通常使用 Standard，特殊叠加效果可选择其他模式。
 5.  将新创建的策略文件分配给 UI（通过修改 `DrawingToolbar` 脚本或在 Inspector 中手动指定）。
 
