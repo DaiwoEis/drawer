@@ -137,6 +137,14 @@ namespace Features.Drawing.App
             }
         }
 
+        public void SetStabilization(float factor)
+        {
+            if (_currentStrategy != null)
+            {
+                _currentStrategy.StabilizationFactor = Mathf.Clamp(factor, 0f, 0.95f);
+            }
+        }
+
         public void SetEraser(bool isEraser)
         {
             _isEraser = isEraser;
@@ -227,11 +235,28 @@ namespace Features.Drawing.App
             {
                 Vector2 target = point.ToNormalized();
                 
-                // StabilizationFactor 0.1 => t=0.9 (Fast follow)
-                // StabilizationFactor 0.9 => t=0.1 (Slow/Smooth follow)
-                float t = Mathf.Clamp01(1.0f - _currentStrategy.StabilizationFactor);
+                // Dynamic Stabilization based on Speed (Distance)
+                // Solves the "Lag vs Smoothness" trade-off:
+                // - Slow movement (detailed work) -> High Stabilization (use full factor)
+                // - Fast movement (broad strokes) -> Low Stabilization (reduce factor to minimize lag)
                 
-                // Exponential Moving Average
+                float dist = Vector2.Distance(target, _currentStabilizedPos);
+                
+                // Thresholds in normalized screen space (0-1)
+                // 0.002 is very slow (sub-pixel detail), 0.05 is a moderate swipe
+                const float MIN_SPEED_THRESHOLD = 0.002f; 
+                const float MAX_SPEED_THRESHOLD = 0.05f;
+
+                // Calculate dynamic factor
+                // speedT: 0 = slow (use full stabilization), 1 = fast (use min stabilization)
+                float speedT = Mathf.InverseLerp(MIN_SPEED_THRESHOLD, MAX_SPEED_THRESHOLD, dist);
+                
+                // Lerp from Configured Factor down to 0 (or a small value like 0.1f * Factor)
+                float dynamicFactor = Mathf.Lerp(_currentStrategy.StabilizationFactor, _currentStrategy.StabilizationFactor * 0.2f, speedT);
+                
+                float t = Mathf.Clamp01(1.0f - dynamicFactor);
+                
+                // Exponential Moving Average with dynamic t
                 _currentStabilizedPos = Vector2.Lerp(_currentStabilizedPos, target, t);
                 
                 // Reconstruct LogicPoint with new position but original pressure
