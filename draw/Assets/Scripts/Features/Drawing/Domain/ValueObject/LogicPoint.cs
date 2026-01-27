@@ -51,6 +51,13 @@ namespace Features.Drawing.Domain.ValueObject
         {
             return Pressure / (float)DrawingConstants.MAX_PRESSURE;
         }
+
+        public static float SqrDistance(LogicPoint a, LogicPoint b)
+        {
+            float dx = (float)a.X - b.X;
+            float dy = (float)a.Y - b.Y;
+            return dx * dx + dy * dy;
+        }
         
         public override string ToString()
         {

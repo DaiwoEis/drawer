@@ -43,8 +43,9 @@ namespace Features.Drawing.Presentation
         private float _strategyEdgeSoftness = 0.05f;
         private bool _strategyUseProcedural = false;
 
-        private RenderTexture _activeRT;
-        private RenderTexture _bakedRT; // BackBuffer for history snapshot
+        public Vector2Int Resolution => _layoutController != null ? _layoutController.Resolution : _resolution;
+
+        // RenderTextures managed by CanvasLayoutController
         private bool _isBaking = false;
 
         private Material _brushMaterial;
@@ -60,12 +61,8 @@ namespace Features.Drawing.Presentation
         
         // Cache for batching (optimization)
         private const int BATCH_SIZE = 1023; // Max for DrawMeshInstanced
-        private Vector2Int _lastResolution;
-        private float _lastDisplayWidth = -1f;
-        private float _lastDisplayHeight = -1f;
-        private float _lastCanvasScale = -1f;
-        private float _lastSizeScale = -1f;
-        private int _baseMaxDimension = 0;
+
+        private CanvasLayoutController _layoutController;
 
         private void Awake()
         {
@@ -78,14 +75,17 @@ namespace Features.Drawing.Presentation
 
             InitializeGpuGenerator();
 
-            if (_baseMaxDimension <= 0)
-            {
-                _baseMaxDimension = Mathf.Max(_resolution.x, _resolution.y);
-            }
+            _layoutController = new CanvasLayoutController(_displayImage, _resolution, 0);
+            _layoutController.OnLayoutChanged += OnLayoutChanged;
 
             InitializeGraphics();
-            UpdateStampGeneratorScaleIfNeeded();
         }
+
+        private void OnLayoutChanged()
+        {
+            ApplyStampGeneratorScale();
+        }
+
 
         private void InitializeGpuGenerator()
         {
@@ -122,15 +122,13 @@ namespace Features.Drawing.Presentation
 
         private void OnRectTransformDimensionsChange()
         {
-            UpdateStampGeneratorScaleIfNeeded();
+            _layoutController?.CheckLayoutChanges();
         }
 
         private void OnDestroy()
         {
-            if (_activeRT != null) _activeRT.Release();
-            if (_activeRT != null) Destroy(_activeRT);
-            if (_bakedRT != null) _bakedRT.Release();
-            if (_bakedRT != null) Destroy(_bakedRT);
+            _layoutController?.Release();
+
             if (_cmd != null) _cmd.Release();
             if (_brushMaterial != null) Destroy(_brushMaterial);
             // Don't destroy _quadMesh if it's a primitive, but if we created it:
@@ -146,52 +144,7 @@ namespace Features.Drawing.Presentation
 
         private void InitializeGraphics()
         {
-            // 0. Auto-adjust resolution to match screen aspect ratio (if not fixed)
-            // ...
-            float aspect = 1.0f;
-            if (_displayImage != null && _displayImage.rectTransform != null && _displayImage.rectTransform.rect.width > 0)
-            {
-                aspect = _displayImage.rectTransform.rect.width / _displayImage.rectTransform.rect.height;
-            }
-            else
-            {
-                aspect = (float)Screen.width / Screen.height;
-            }
-
-            // ... (Resolution logic)
-            int maxDim = _baseMaxDimension > 0 ? _baseMaxDimension : Mathf.Max(_resolution.x, _resolution.y);
-            if (maxDim < 2048) maxDim = 2048; 
-
-            if (aspect >= 1f)
-            {
-                _resolution.x = maxDim;
-                _resolution.y = Mathf.RoundToInt(maxDim / aspect);
-            }
-            else
-            {
-                _resolution.y = maxDim;
-                _resolution.x = Mathf.RoundToInt(maxDim * aspect);
-            }
-
-            // 1. Setup RenderTexture
-            RebuildRenderTexture(_resolution, false);
-            
-            // Rebuild BakedRT as well
-            if (_bakedRT != null)
-            {
-                _bakedRT.Release();
-                Destroy(_bakedRT);
-            }
-            _bakedRT = new RenderTexture(_resolution.x, _resolution.y, 0, RenderTextureFormat.ARGB32);
-            _bakedRT.filterMode = FilterMode.Bilinear;
-            _bakedRT.useMipMap = false;
-            _bakedRT.Create();
-            
-            // Clear BakedRT to transparent
-            var prev = RenderTexture.active;
-            RenderTexture.active = _bakedRT;
-            GL.Clear(true, true, Color.clear);
-            RenderTexture.active = prev;
+            _layoutController.Initialize();
 
             // 2. Setup Material
             if (_brushShader == null) 
@@ -219,148 +172,16 @@ namespace Features.Drawing.Presentation
 
         private void ApplyStampGeneratorScale()
         {
-            float displayWidth;
-            float displayHeight;
-            float canvasScale;
-            float sizeScale = GetBrushSizeScale(out displayWidth, out displayHeight, out canvasScale);
+            float sizeScale = _layoutController.GetBrushSizeScale();
+            Vector2Int res = _layoutController.Resolution;
 
-            _stampGenerator.SetCanvasResolution(_resolution);
+            _stampGenerator.SetCanvasResolution(res);
             _stampGenerator.SetSizeScale(sizeScale);
 
             if (_useGpuStamping && _gpuStampGenerator != null)
             {
-                _gpuStampGenerator.SetCanvasResolution(_resolution);
+                _gpuStampGenerator.SetCanvasResolution(res);
                 _gpuStampGenerator.SetSizeScale(sizeScale);
-            }
-
-            _lastResolution = _resolution;
-            _lastDisplayWidth = displayWidth;
-            _lastDisplayHeight = displayHeight;
-            _lastCanvasScale = canvasScale;
-            _lastSizeScale = sizeScale;
-        }
-
-        private Vector2Int CalculateResolution(float aspect)
-        {
-            int maxDim = _baseMaxDimension > 0 ? _baseMaxDimension : Mathf.Max(_resolution.x, _resolution.y);
-            if (maxDim < 2048) maxDim = 2048;
-
-            if (aspect >= 1f)
-            {
-                return new Vector2Int(maxDim, Mathf.RoundToInt(maxDim / aspect));
-            }
-
-            return new Vector2Int(Mathf.RoundToInt(maxDim * aspect), maxDim);
-        }
-
-        private void RebuildRenderTexture(Vector2Int targetResolution, bool preserveContent)
-        {
-            if (targetResolution.x <= 0 || targetResolution.y <= 0)
-            {
-                return;
-            }
-
-            RenderTexture newRT = new RenderTexture(targetResolution.x, targetResolution.y, 0, RenderTextureFormat.ARGB32);
-            newRT.filterMode = FilterMode.Bilinear;
-            newRT.useMipMap = false;
-            newRT.antiAliasing = 1;
-            newRT.Create();
-
-            if (preserveContent && _activeRT != null)
-            {
-                Graphics.Blit(_activeRT, newRT);
-            }
-            else
-            {
-                Graphics.SetRenderTarget(newRT);
-                GL.Clear(true, true, Color.clear);
-            }
-
-            if (_activeRT != null)
-            {
-                _activeRT.Release();
-                Destroy(_activeRT);
-            }
-
-            _activeRT = newRT;
-            _resolution = targetResolution;
-
-            if (_displayImage != null)
-            {
-                _displayImage.texture = _activeRT;
-            }
-        }
-
-        private void UpdateRenderTextureIfNeeded(float displayWidth, float displayHeight)
-        {
-            if (displayWidth <= 0f || displayHeight <= 0f)
-            {
-                return;
-            }
-
-            float aspect = displayWidth / displayHeight;
-            Vector2Int targetResolution = CalculateResolution(aspect);
-
-            if (_activeRT == null || targetResolution != _resolution)
-            {
-                RebuildRenderTexture(targetResolution, _activeRT != null);
-            }
-        }
-
-        private float GetBrushSizeScale(out float displayWidth, out float displayHeight, out float canvasScale)
-        {
-            displayWidth = 0f;
-            displayHeight = 0f;
-            canvasScale = 1f;
-
-            if (_displayImage != null && _displayImage.rectTransform != null)
-            {
-                Rect rect = _displayImage.rectTransform.rect;
-                if (rect.width > 0f && rect.height > 0f)
-                {
-                    Canvas canvas = _displayImage.canvas;
-                    if (canvas != null)
-                    {
-                        canvasScale = canvas.scaleFactor;
-                    }
-
-                    displayWidth = rect.width * canvasScale;
-                    displayHeight = rect.height * canvasScale;
-                }
-            }
-
-            if (displayWidth <= 0f || displayHeight <= 0f)
-            {
-                displayWidth = Screen.width;
-                displayHeight = Screen.height;
-            }
-
-            if (displayWidth <= 0f || displayHeight <= 0f)
-            {
-                return 1f;
-            }
-
-            return Mathf.Min(_resolution.x / displayWidth, _resolution.y / displayHeight);
-        }
-
-        private void UpdateStampGeneratorScaleIfNeeded()
-        {
-            float displayWidth;
-            float displayHeight;
-            float canvasScale;
-            float sizeScale = GetBrushSizeScale(out displayWidth, out displayHeight, out canvasScale);
-
-            UpdateRenderTextureIfNeeded(displayWidth, displayHeight);
-
-            sizeScale = GetBrushSizeScale(out displayWidth, out displayHeight, out canvasScale);
-
-            if (_lastResolution != _resolution ||
-                !Mathf.Approximately(_lastDisplayWidth, displayWidth) ||
-                !Mathf.Approximately(_lastDisplayHeight, displayHeight) ||
-                !Mathf.Approximately(_lastCanvasScale, canvasScale) ||
-                !Mathf.Approximately(_lastSizeScale, sizeScale))
-            {
-                ApplyStampGeneratorScale();
             }
         }
 
@@ -503,13 +324,13 @@ namespace Features.Drawing.Presentation
         /// </summary>
         public void DrawPoints(IEnumerable<LogicPoint> points)
         {
-            if (_activeRT == null)
+            if (_layoutController.ActiveRT == null)
             {
                 Debug.LogError("[CanvasRenderer] ActiveRT is null!");
                 return;
             }
 
-            UpdateStampGeneratorScaleIfNeeded();
+            _layoutController.CheckLayoutChanges();
             _cmd.Clear();
             
             // Setup Eraser vs Brush state
@@ -524,7 +345,7 @@ namespace Features.Drawing.Presentation
             }
             // ELSE: Do NOT force override blend modes. Trust the state set by ConfigureBrush.
             
-            _cmd.SetRenderTarget(_isBaking ? _bakedRT : _activeRT);
+            _cmd.SetRenderTarget(_isBaking ? _layoutController.BakedRT : _layoutController.ActiveRT);
 
             // Prepare PropertyBlock for color
             Color drawColor = _isEraser ? new Color(0,0,0,1) : _brushColor; 
@@ -534,7 +355,7 @@ namespace Features.Drawing.Presentation
             _props.SetColor("_Color", drawColor);
 
             _cmd.SetViewMatrix(Matrix4x4.identity);
-            _cmd.SetProjectionMatrix(Matrix4x4.Ortho(0, _resolution.x, 0, _resolution.y, -1, 1));
+            _cmd.SetProjectionMatrix(Matrix4x4.Ortho(0, _layoutController.Resolution.x, 0, _layoutController.Resolution.y, -1, 1));
 
             // Generate stamps
             bool gpuSuccess = false;
@@ -595,7 +416,7 @@ namespace Features.Drawing.Presentation
         
         public void ClearCanvas()
         {
-            var target = _isBaking ? _bakedRT : _activeRT;
+            var target = _isBaking ? _layoutController.BakedRT : _layoutController.ActiveRT;
             Graphics.SetRenderTarget(target);
             GL.Clear(true, true, Color.clear);
             
@@ -617,8 +438,8 @@ namespace Features.Drawing.Presentation
 
         public void RestoreFromBackBuffer()
         {
-            if (_bakedRT == null || _activeRT == null) return;
-            Graphics.Blit(_bakedRT, _activeRT);
+            if (_layoutController.BakedRT == null || _layoutController.ActiveRT == null) return;
+            Graphics.Blit(_layoutController.BakedRT, _layoutController.ActiveRT);
         }
     }
 }

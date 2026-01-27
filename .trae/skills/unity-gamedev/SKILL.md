@@ -56,6 +56,31 @@ For complex behaviors (Player Controller, AI), use a State Machine to organize l
 - Avoid Singleton abuse (`GameManager.Instance`).
 - Prefer initializing components via `Init()` methods or using a lightweight Service Locator / DI framework (like VContainer or Zenject if available, or simple constructor injection for pure C# classes).
 
+### 5. Anti-Patterns to Avoid
+
+#### The God Class (Monolithic MonoBehaviour)
+- **Symptom**: A single script (e.g., `GameManager.cs` or `Player.cs`) exceeding 500+ lines, handling input, logic, UI, and data storage simultaneously.
+- **Solution**: Break it down using the **Single Responsibility Principle (SRP)**.
+  - **Input**: `PlayerInputReader` (reads keys, invokes events).
+  - **Logic**: `PlayerMovement`, `PlayerHealth`, `PlayerInventory` (handle specific mechanics).
+  - **View/UI**: `PlayerAnimator`, `PlayerUIManager` (listen to logic events, update visuals).
+  - **Data**: `PlayerStatsSO` (ScriptableObject holding config like speed, max health).
+- **Refactoring Strategy**: Identify distinct roles in the God Class and extract them into separate components or pure C# classes. Use events to communicate between them.
+
+### 6. General Software Design Principles
+
+#### SOLID Principles
+- **SRP (Single Responsibility Principle)**: A class should have one, and only one, reason to change. (As seen in the God Class anti-pattern).
+- **OCP (Open/Closed Principle)**: Classes should be open for extension but closed for modification. Use interfaces or abstract base classes (e.g., `IEnemy`) so you can add new enemy types without changing the `EnemyManager` code.
+- **LSP (Liskov Substitution Principle)**: Subtypes must be substitutable for their base types. If `FlyingEnemy` inherits from `Enemy`, it shouldn't throw an exception when `Walk()` is called (interface segregation helps here).
+- **ISP (Interface Segregation Principle)**: Clients should not be forced to depend on interfaces they do not use. Prefer small, specific interfaces (e.g., `IDamageable`, `IMovable`) over one giant `IEntity` interface.
+- **DIP (Dependency Inversion Principle)**: Depend on abstractions, not concretions. `Player` should depend on `IInputProvider`, not `KeyboardInput`. This allows easy swapping for `GamepadInput` or `AIInput`.
+
+#### Other Key Principles
+- **Composition over Inheritance**: In Unity, prefer adding small functional components (`Health`, `Mover`, `Attacker`) to a GameObject rather than creating deep inheritance trees (`Entity -> LivingEntity -> Creature -> Enemy -> Goblin`).
+- **DRY (Don't Repeat Yourself)**: Extract common logic into utility methods or shared components.
+- **KISS (Keep It Simple, Stupid)**: Avoid over-engineering. Solved the problem in the simplest way possible first.
+
 ## Example Template: Modular Player Controller
 
 ```csharp

@@ -2,7 +2,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using Features.Drawing.Domain.ValueObject;
-using Features.Drawing.App; 
+using Features.Drawing.App.Interface;
+using Features.Drawing.App;
 
 namespace Features.Drawing.Presentation
 {
@@ -13,11 +14,17 @@ namespace Features.Drawing.Presentation
     public class MouseInputProvider : MonoBehaviour
     {
         [SerializeField] private RectTransform _inputArea;
-        [SerializeField] private DrawingAppService _appService;
+        [SerializeField] private MonoBehaviour _inputHandlerComponent; // Serialized as MonoBehaviour to allow Interface assignment (sort of)
         
+        public RectTransform InputArea => _inputArea;
+        
+        private IInputHandler _inputHandler;
         private bool _isDrawing = false;
         private Vector2 _lastPos;
         private readonly List<RaycastResult> _raycastResults = new List<RaycastResult>(8);
+        
+        // Cache to avoid GC in Update
+        private PointerEventData _cachedPointerEventData;
 
         private void Awake()
         {
@@ -30,20 +37,29 @@ namespace Features.Drawing.Presentation
                 }
             }
             
-            if (_appService == null)
+            // Resolve Interface
+            if (_inputHandlerComponent != null)
             {
-                _appService = FindObjectOfType<DrawingAppService>();
-                if (_appService == null)
+                _inputHandler = _inputHandlerComponent as IInputHandler;
+            }
+            
+            if (_inputHandler == null)
+            {
+                // Fallback to finding the service
+                var service = FindObjectOfType<DrawingAppService>();
+                _inputHandler = service as IInputHandler;
+                _inputHandlerComponent = service; // Assign back for inspector consistency if possible
+                
+                if (_inputHandler == null)
                 {
-                    var go = new GameObject("DrawingAppService");
-                    _appService = go.AddComponent<DrawingAppService>();
+                    Debug.LogError("MouseInputProvider: No IInputHandler found! Please assign DrawingAppService.");
                 }
             }
         }
 
         private void Update()
         {
-            if (_appService == null) return;
+            if (_inputHandler == null) return;
             
             // 1. Input Detection (Mouse)
             bool isDown = Input.GetMouseButtonDown(0);
@@ -124,31 +140,36 @@ namespace Features.Drawing.Presentation
         {
             _isDrawing = true;
             _lastPos = pos;
-            _appService.StartStroke(LogicPoint.FromNormalized(pos, 1.0f));
+            _inputHandler.StartStroke(LogicPoint.FromNormalized(pos, 1.0f));
         }
 
         private void ContinueStroke(Vector2 pos)
         {
             if (Vector2.Distance(pos, _lastPos) < 0.001f) return;
             _lastPos = pos;
-            _appService.MoveStroke(LogicPoint.FromNormalized(pos, 1.0f));
+            _inputHandler.MoveStroke(LogicPoint.FromNormalized(pos, 1.0f));
         }
 
         private void EndStroke()
         {
             _isDrawing = false;
-            _appService.EndStroke();
+            _inputHandler.EndStroke();
         }
 
         private bool IsPointerOverBlockingUi(Vector2 screenPos)
         {
             if (EventSystem.current == null) return false;
 
-            PointerEventData pointerData = new PointerEventData(EventSystem.current);
+            if (_cachedPointerEventData == null)
+            {
+                _cachedPointerEventData = new PointerEventData(EventSystem.current);
+            }
 
-            pointerData.position = screenPos;
+            _cachedPointerEventData.Reset();
+            _cachedPointerEventData.position = screenPos;
+
             _raycastResults.Clear();
-            EventSystem.current.RaycastAll(pointerData, _raycastResults);
+            EventSystem.current.RaycastAll(_cachedPointerEventData, _raycastResults);
 
             if (_raycastResults.Count == 0) return false;
             if (_inputArea == null) return true;

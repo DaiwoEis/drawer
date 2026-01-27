@@ -10,6 +10,7 @@ using Features.Drawing.Domain.Data;
 using Features.Drawing.Domain.Entity;
 using Common.Constants;
 using Features.Drawing.App.Command;
+using Features.Drawing.App.Interface;
 
 namespace Features.Drawing.App
 {
@@ -17,7 +18,7 @@ namespace Features.Drawing.App
     /// Facade service that coordinates input, domain logic, and rendering.
     /// This is the main entry point for the drawing feature.
     /// </summary>
-    public class DrawingAppService : MonoBehaviour
+    public class DrawingAppService : MonoBehaviour, IInputHandler
     {
         [Header("References")]
         [SerializeField] private Features.Drawing.Presentation.CanvasRenderer _concreteRenderer; 
@@ -31,32 +32,34 @@ namespace Features.Drawing.App
         private bool _isEraser = false;
         private BrushStrategy _currentStrategy;
         private Vector2 _currentStabilizedPos;
+        private long _nextSequenceId = 1;
+        
+        // Public Accessors for UI/Preview
+        public bool IsEraser => _isEraser;
+        public float CurrentSize => _currentSize;
+        public BrushStrategy EraserStrategy => _eraserStrategy;
+
+        // Optimization State
+        private LogicPoint _lastAddedPoint;
+
         
         // Services
         private IStrokeRenderer _renderer;
         private StrokeSmoothingService _smoothingService;
-        
+        private DrawingHistoryManager _historyManager;
+
         // Buffers
         private List<LogicPoint> _currentStrokeRaw = new List<LogicPoint>(1024);
         private List<LogicPoint> _smoothingInputBuffer = new List<LogicPoint>(8);
         private List<LogicPoint> _smoothingOutputBuffer = new List<LogicPoint>(64);
         private List<LogicPoint> _singlePointBuffer = new List<LogicPoint>(1);
 
-        // History
-        private List<ICommand> _history = new List<ICommand>();
-        private List<ICommand> _redoHistory = new List<ICommand>();
-        
-        // Archive (The Source of Truth for BakedRT)
-        // Keeps track of commands that have been baked into the texture.
-        // Allows us to rebuild the BakedRT if resolution changes or sync is needed.
-        private List<ICommand> _archivedHistory = new List<ICommand>();
-
         // Current stroke state capturing
         private Texture2D _currentRuntimeTexture;
         private StrokeEntity _currentStroke;
 
-        private StrokeSpatialIndex _spatialIndex;
-
+        private StrokeCollisionService _collisionService;
+        
         // Events
         public event System.Action OnStrokeStarted;
 
@@ -73,7 +76,8 @@ namespace Features.Drawing.App
             }
             
             _smoothingService = new StrokeSmoothingService();
-            _spatialIndex = new StrokeSpatialIndex();
+            _collisionService = new StrokeCollisionService();
+            _historyManager = new DrawingHistoryManager(_renderer, _smoothingService, _collisionService);
         }
 
         // --- Synchronization / Serialization Support ---
@@ -82,81 +86,19 @@ namespace Features.Drawing.App
         /// Gets the complete history (Archived + Active) for synchronization or saving.
         /// The result is the Source of Truth.
         /// </summary>
-        public List<ICommand> GetFullHistory()
-        {
-            var fullList = new List<ICommand>(_archivedHistory.Count + _history.Count);
-            fullList.AddRange(_archivedHistory);
-            fullList.AddRange(_history);
-            return fullList;
-        }
+        public List<ICommand> GetFullHistory() => _historyManager.GetFullHistory();
 
         /// <summary>
         /// Replaces the current local history with a remote authoritative history.
         /// This is a "Stop the World" full sync operation.
         /// </summary>
-        public void ReplaceHistory(List<ICommand> remoteHistory)
-        {
-            // 1. Clear everything
-            _history.Clear();
-            _redoHistory.Clear();
-            _archivedHistory.Clear();
-            _renderer.ClearCanvas();
-            _spatialIndex.Clear(); // Assuming we expose Clear on SpatialIndex or recreate it
-
-            // 2. Replay all commands
-            // Optimize: If list is huge, we should batch them or use the "Baking" optimization
-            // For now, simple replay
-            foreach (var cmd in remoteHistory)
-            {
-                // Execute without adding to history (we will add manually)
-                cmd.Execute(_renderer, _smoothingService);
-                
-                // Add to appropriate list based on logic (or just put all in _archivedHistory if we treat them as 'done')
-                // But to keep undo working for the last 50 steps, we should split them
-            }
-
-            // 3. Rebuild internal lists
-            int total = remoteHistory.Count;
-            int activeCount = Mathf.Min(total, 50); // Keep last 50 active
-            int archiveCount = total - activeCount;
-
-            if (archiveCount > 0)
-            {
-                _archivedHistory.AddRange(remoteHistory.GetRange(0, archiveCount));
-            }
-            
-            if (activeCount > 0)
-            {
-                _history.AddRange(remoteHistory.GetRange(archiveCount, activeCount));
-            }
-            
-            // 4. Force Bake/Rebuild visual state if needed
-            // Since we executed them above, the visual state is correct (drawn on active RenderTexture)
-            // Ideally, we should "Bake" the archived part to the BackBuffer
-            // But for simplicity, the current Execute() calls draw to the active buffer.
-            // If we have a separate BackBuffer, we might need to handle that.
-            // For now, assuming Execute() draws to the visible canvas.
-        }
+        public void ReplaceHistory(List<ICommand> remoteHistory) => _historyManager.ReplaceHistory(remoteHistory);
 
         /// <summary>
         /// Generates a lightweight checksum (hash) of the current history state.
         /// Clients can exchange this string to detect desync.
         /// </summary>
-        public string GetHistoryChecksum()
-        {
-            // Simple hash based on Command IDs
-            // In production, use a better hash (CRC32/MD5) over the IDs
-            long hash = 0;
-            foreach (var cmd in _archivedHistory)
-            {
-                hash = (hash * 31) + cmd.Id.GetHashCode();
-            }
-            foreach (var cmd in _history)
-            {
-                hash = (hash * 31) + cmd.Id.GetHashCode();
-            }
-            return hash.ToString("X");
-        }
+        public string GetHistoryChecksum() => _historyManager.GetHistoryChecksum();
 
         // --- State Management ---
 
@@ -261,7 +203,7 @@ namespace Features.Drawing.App
             cmd.Execute(_renderer, _smoothingService);
             
             // Add to history
-            AddToHistory(cmd);
+            _historyManager.AddCommand(cmd);
         }
 
         // --- Input Handling ---
@@ -271,6 +213,26 @@ namespace Features.Drawing.App
             // Notify listeners (e.g. UI to close panels)
             OnStrokeStarted?.Invoke();
             
+            // CRITICAL FIX: Force sync Renderer state with Service state.
+            // Undo/Redo operations (RedrawHistory) may have left the renderer in a different state 
+            // (e.g. Eraser mode, wrong brush, wrong size).
+            if (_renderer != null)
+            {
+                if (_isEraser)
+                {
+                    if (_eraserStrategy != null) _renderer.ConfigureBrush(_eraserStrategy);
+                    _renderer.SetEraser(true);
+                    _renderer.SetBrushSize(_currentSize); // _currentSize is already set to eraser size
+                }
+                else
+                {
+                    if (_currentStrategy != null) _renderer.ConfigureBrush(_currentStrategy, _currentRuntimeTexture);
+                    _renderer.SetEraser(false);
+                    _renderer.SetBrushColor(_currentColor);
+                    _renderer.SetBrushSize(_currentSize);
+                }
+            }
+
             _currentStrokeRaw.Clear();
 
             // Create Domain Entity
@@ -281,14 +243,36 @@ namespace Features.Drawing.App
             // Use reserved ID for eraser to allow network clients to identify it
             ushort brushId = _isEraser ? DrawingConstants.ERASER_BRUSH_ID : (ushort)0;
             
-            _currentStroke = new StrokeEntity(id, 0, brushId, seed, colorInt, _currentSize);
+            _currentStroke = new StrokeEntity(id, 0, brushId, seed, colorInt, _currentSize, _nextSequenceId++);
 
+            _lastAddedPoint = point;
             AddPoint(point);
             _currentStabilizedPos = point.ToNormalized();
         }
 
         public void MoveStroke(LogicPoint point)
         {
+            // Optimization: Eraser Deduplication (User Requirement)
+            // "Eraser repeated drawing positions can be not recorded"
+            // Filter out points that are too close to the last added point to avoid redundant collision checks and history data.
+            if (_isEraser)
+            {
+                // LogicPoint uses 0-65535. 
+                // Convert size (pixels) to approximate logical units.
+                // Assuming 1920px screen ~ 65535 units => factor ~ 34.
+                // Threshold: 10% of brush size.
+                // If brush is 20px, threshold is 2px ~ 70 units.
+                float scale = 65535f / 2000f; // Approx
+                float threshold = (_currentSize * 0.1f) * scale;
+                
+                // Use squared distance for perf
+                float sqrDist = LogicPoint.SqrDistance(_lastAddedPoint, point);
+                if (sqrDist < threshold * threshold)
+                {
+                    return; // Skip this point
+                }
+            }
+
             LogicPoint pointToAdd = point;
             
             // Apply Stabilization (Anti-Shake)
@@ -314,7 +298,10 @@ namespace Features.Drawing.App
             }
 
             AddPoint(pointToAdd);
+            _lastAddedPoint = pointToAdd;
         }
+
+
 
         public void EndStroke()
         {
@@ -329,25 +316,11 @@ namespace Features.Drawing.App
                 // OPTIMIZATION: Discard eraser strokes that don't intersect with any existing ink.
                 if (_isEraser)
                 {
-                    Rect bounds = CalculateStrokeBounds(_currentStroke);
-                    var candidates = _spatialIndex.Query(bounds);
+                    bool isEffective = _collisionService.IsEraserStrokeEffective(_currentStroke, _historyManager.ActiveStrokeIds);
                     
-                    bool hitInk = false;
-                    foreach (var s in candidates)
+                    if (!isEffective)
                     {
-                        // Check if it's a normal brush (not eraser)
-                        // Note: Erasing an eraser stroke is meaningless (erasing nothing).
-                        // We only care if we hit actual ink.
-                        if (s.BrushId != DrawingConstants.ERASER_BRUSH_ID)
-                        {
-                            hitInk = true;
-                            break;
-                        }
-                    }
-
-                    if (!hitInk)
-                    {
-                        Debug.Log($"[Optimization] Eraser stroke discarded [ID: {_currentStroke.Id}] - No intersection with ink.");
+                        Debug.Log($"[Optimization] Eraser stroke discarded [ID: {_currentStroke.Id}] - Redundant (covered area or no ink).");
                         _currentStroke = null;
                         return;
                     }
@@ -357,20 +330,24 @@ namespace Features.Drawing.App
                 // Note: We copy the points from the domain entity (or raw list).
                 // _currentStroke.Points is List<LogicPoint>.
                 // We pass the current state configuration.
+                
+                // Fix: Eraser should use _eraserStrategy if available
+                var strategyToUse = _isEraser ? _eraserStrategy : _currentStrategy;
+
                 var cmd = new DrawStrokeCommand(
                     _currentStroke.Id.ToString(),
                     new List<LogicPoint>(_currentStroke.Points),
-                    _currentStrategy,
+                    strategyToUse,
                     _currentRuntimeTexture,
                     _currentColor,
                     _currentSize,
                     _isEraser
                 );
                 
-                AddToHistory(cmd);
+                _historyManager.AddCommand(cmd);
                 
                 // Spatial Indexing
-                _spatialIndex.Insert(_currentStroke);
+                _collisionService.Insert(_currentStroke);
             }
             
             // Serialization Check (Debug)
@@ -380,97 +357,38 @@ namespace Features.Drawing.App
             _currentStroke = null;
         }
 
-        private Rect CalculateStrokeBounds(StrokeEntity stroke)
-        {
-             if (stroke.Points == null || stroke.Points.Count == 0) return Rect.zero;
-             
-             float minX = float.MaxValue, minY = float.MaxValue;
-             float maxX = float.MinValue, maxY = float.MinValue;
-             
-             foreach(var p in stroke.Points)
-             {
-                 if (p.X < minX) minX = p.X;
-                 if (p.X > maxX) maxX = p.X;
-                 if (p.Y < minY) minY = p.Y;
-                 if (p.Y > maxY) maxY = p.Y;
-             }
-             
-             // Add padding to be safe (account for brush size approximation)
-             // LogicPoint uses 0-65535 space. 
-             // 1000 units is ~1.5% of the canvas width, which is a safe buffer.
-             float padding = 1000f; 
-             
-             return new Rect(minX - padding, minY - padding, (maxX - minX) + padding * 2, (maxY - minY) + padding * 2);
-        }
-
-        private void AddToHistory(ICommand cmd)
-        {
-            Debug.Log($"[History] Added command: {cmd.GetType().Name} [ID: {cmd.Id}]. Count: {_history.Count + 1}");
-            _history.Add(cmd);
-            _redoHistory.Clear();
-            
-            // Maintain sliding window (FIFO - First In First Out)
-            // Remove the oldest commands (index 0) to keep only the most recent 50
-            while (_history.Count > 50)
-            {
-                var removedCmd = _history[0];
-                
-                // Archive it (Logical Save)
-                _archivedHistory.Add(removedCmd);
-                
-                // Optimization: If the baked command is a ClearCanvas, 
-                // we can safely discard all previous archive history to save RAM.
-                if (removedCmd is ClearCanvasCommand)
-                {
-                    // Everything before a Clear is visually irrelevant.
-                    // (Unless we want to support "Undo the Clear" even after it falls off the 50 stack? 
-                    //  No, usually if it falls off stack, it's finalized).
-                    // Actually, keeping the Clear command itself is enough as a starting point.
-                    _archivedHistory.Clear();
-                    _archivedHistory.Add(removedCmd);
-                }
-
-                // Bake the command into the back buffer before removing it (Visual Save)
-                if (_renderer != null)
-                {
-                    _renderer.SetBakingMode(true);
-                    removedCmd.Execute(_renderer, _smoothingService);
-                    _renderer.SetBakingMode(false);
-                }
-                
-                // Debug.Log($"[History] Removed old command [ID: {removedCmd.Id}] to maintain limit.");
-                _history.RemoveAt(0);
-            }
-        }
-
         public void Undo()
         {
-            if (_history.Count == 0) return;
+            if (!_historyManager.CanUndo) return;
 
-            // Remove last command
-            var cmd = _history[_history.Count - 1];
-            Debug.Log($"[Undo] Reverting command [ID: {cmd.Id}]");
-            _history.RemoveAt(_history.Count - 1);
+            // Save state
+            var savedColor = _currentColor;
+            var savedSize = _currentSize;
+            var savedEraser = _isEraser;
+            var savedStrategy = _currentStrategy;
+            var savedRuntimeTex = _currentRuntimeTexture;
+
+            _historyManager.Undo();
             
-            // Add to Redo history
-            _redoHistory.Add(cmd);
-            
-            RedrawHistory();
+            // Restore state
+            RestoreState(savedColor, savedSize, savedEraser, savedStrategy, savedRuntimeTex);
         }
 
         public void Redo()
         {
-            if (_redoHistory.Count == 0) return;
+            if (!_historyManager.CanRedo) return;
 
-            // Remove last redo item
-            var cmd = _redoHistory[_redoHistory.Count - 1];
-            Debug.Log($"[Redo] Restoring command [ID: {cmd.Id}]");
-            _redoHistory.RemoveAt(_redoHistory.Count - 1);
+            // Save state
+            var savedColor = _currentColor;
+            var savedSize = _currentSize;
+            var savedEraser = _isEraser;
+            var savedStrategy = _currentStrategy;
+            var savedRuntimeTex = _currentRuntimeTexture;
+
+            _historyManager.Redo();
             
-            // Add back to history
-            _history.Add(cmd);
-            
-            RedrawHistory();
+            // Restore state
+            RestoreState(savedColor, savedSize, savedEraser, savedStrategy, savedRuntimeTex);
         }
 
         /// <summary>
@@ -482,84 +400,31 @@ namespace Features.Drawing.App
         /// </summary>
         public void RebuildBackBuffer()
         {
-            if (_renderer == null) return;
-            
-            // 1. Clear the BackBuffer
-            _renderer.SetBakingMode(true);
-            _renderer.ClearCanvas();
-            
-            // 2. Replay all archived commands
-            foreach (var cmd in _archivedHistory)
-            {
-                cmd.Execute(_renderer, _smoothingService);
-            }
-            
-            _renderer.SetBakingMode(false);
-            
-            // 3. Trigger a normal redraw to composite BackBuffer + Active History
-            RedrawHistory();
-            
-            Debug.Log($"[History] Rebuilt BackBuffer from {_archivedHistory.Count} archived commands.");
-        }
-
-        private void RedrawHistory()
-        {
-            if (_renderer == null) return;
-
-            // Save current state to restore later
+            // Save state
             var savedColor = _currentColor;
             var savedSize = _currentSize;
             var savedEraser = _isEraser;
             var savedStrategy = _currentStrategy;
             var savedRuntimeTex = _currentRuntimeTexture;
+
+            _historyManager.RebuildBackBuffer();
             
-            // 1. Determine start state
-            int startIndex = 0;
-            bool fullClear = false;
+            // Restore state
+            RestoreState(savedColor, savedSize, savedEraser, savedStrategy, savedRuntimeTex);
+        }
 
-            // Check if we have a ClearCanvasCommand in history
-            for (int i = _history.Count - 1; i >= 0; i--)
-            {
-                if (_history[i] is ClearCanvasCommand)
-                {
-                    startIndex = i;
-                    fullClear = true;
-                    break;
-                }
-            }
-
-            // 2. Prepare Canvas
-            if (fullClear)
-            {
-                // If we found a Clear command, we can just clear the active canvas
-                // The replay will start FROM that clear command.
-                // Note: We don't need the BackBuffer in this case because the Clear command wipes everything anyway.
-                _renderer.ClearCanvas();
-            }
-            else
-            {
-                // If no clear command found, we must start from the BackBuffer (Snapshot)
-                // This restores all the "forgotten" history items.
-                _renderer.RestoreFromBackBuffer();
-            }
-            
-            // 3. Replay commands
-            for (int i = startIndex; i < _history.Count; i++)
-            {
-                _history[i].Execute(_renderer, _smoothingService);
-            }
-
-            // Restore original state
-            if (savedEraser)
+        private void RestoreState(Color color, float size, bool isEraser, BrushStrategy strategy, Texture2D runtimeTex)
+        {
+            if (isEraser)
             {
                 SetEraser(true);
-                SetSize(savedSize); 
+                SetSize(size); 
             }
             else
             {
-                SetBrushStrategy(savedStrategy, savedRuntimeTex);
-                SetColor(savedColor);
-                SetSize(savedSize);
+                SetBrushStrategy(strategy, runtimeTex);
+                SetColor(color);
+                SetSize(size);
             }
         }
 

@@ -19,10 +19,13 @@ namespace Features.Drawing.Domain.Entity
         // Color encoded as integer (RGBA) for simple serialization
         public uint ColorRGBA { get; private set; }
         
+        // Sequence ID to track rendering order (higher means drawn later)
+        public long SequenceId { get; private set; }
+
         private readonly List<LogicPoint> _points;
         public IReadOnlyList<LogicPoint> Points => _points;
 
-        public StrokeEntity(uint id, ushort authorId, ushort brushId, uint seed, uint colorRGBA, float size)
+        public StrokeEntity(uint id, ushort authorId, ushort brushId, uint seed, uint colorRGBA, float size, long sequenceId = 0)
         {
             Id = id;
             AuthorId = authorId;
@@ -30,6 +33,7 @@ namespace Features.Drawing.Domain.Entity
             Seed = seed;
             ColorRGBA = colorRGBA;
             Size = size;
+            SequenceId = sequenceId;
             _points = new List<LogicPoint>();
             IsEnded = false;
         }

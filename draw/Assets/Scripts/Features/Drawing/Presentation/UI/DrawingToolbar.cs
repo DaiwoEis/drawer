@@ -130,6 +130,17 @@ namespace Features.Drawing.Presentation.UI
 
             SetSize(_currentSize); // Initialize size and UI
             SwitchTab(Tab.Brush);
+
+            // Ensure Eraser Preview exists
+            if (FindObjectOfType<EraserPreviewController>() == null)
+            {
+                var go = new GameObject("EraserPreviewController");
+                // Parent it to the toolbar's canvas or input provider's area if possible
+                // But the controller will find its own parent/input area.
+                // Just keeping it in the hierarchy is enough.
+                go.transform.SetParent(this.transform.parent); 
+                go.AddComponent<EraserPreviewController>();
+            }
         }
 
         private void OnDestroy()
