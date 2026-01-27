@@ -25,6 +25,7 @@ namespace Features.Drawing.Domain.Data
                 writer.Write(stroke.BrushId);
                 writer.Write(stroke.Seed);
                 writer.Write(stroke.ColorRGBA);
+                writer.Write(stroke.Size); // Serialize Size
 
                 // Points
                 var points = stroke.Points;
@@ -78,7 +79,7 @@ namespace Features.Drawing.Domain.Data
                 ushort brushId = reader.ReadUInt16();
                 uint seed = reader.ReadUInt32();
                 uint color = reader.ReadUInt32();
-                float size = reader.ReadSingle();
+                float size = reader.ReadSingle(); // Deserialize Size
 
                 var stroke = new StrokeEntity(id, authorId, brushId, seed, color, size);
 

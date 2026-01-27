@@ -8,6 +8,7 @@ using Features.Drawing.Presentation;
 using Features.Drawing.Domain.Algorithm;
 using Features.Drawing.Domain.Data;
 using Features.Drawing.Domain.Entity;
+using Common.Constants;
 
 namespace Features.Drawing.App
 {
@@ -28,6 +29,7 @@ namespace Features.Drawing.App
         private float _lastEraserSize = 30f;
         private bool _isEraser = false;
         private BrushStrategy _currentStrategy;
+        private Vector2 _currentStabilizedPos;
         
         // Services
         private IStrokeRenderer _renderer;
@@ -194,7 +196,11 @@ namespace Features.Drawing.App
             uint id = (uint)Random.Range(0, int.MaxValue); // Simple random ID
             uint seed = (uint)Random.Range(0, int.MaxValue);
             uint colorInt = ColorToUInt(_currentColor);
-            _currentStroke = new StrokeEntity(id, 0, 0, seed, colorInt, _currentSize);
+            
+            // Use reserved ID for eraser to allow network clients to identify it
+            ushort brushId = _isEraser ? DrawingConstants.ERASER_BRUSH_ID : (ushort)0;
+            
+            _currentStroke = new StrokeEntity(id, 0, brushId, seed, colorInt, _currentSize);
 
             // Create History Item
             _currentHistoryItem = new StrokeHistoryItem
@@ -208,11 +214,36 @@ namespace Features.Drawing.App
             };
 
             AddPoint(point);
+            _currentStabilizedPos = point.ToNormalized();
         }
 
         public void MoveStroke(LogicPoint point)
         {
-            AddPoint(point);
+            LogicPoint pointToAdd = point;
+            
+            // Apply Stabilization (Anti-Shake)
+            // Skip for Eraser (usually we want raw input for precise erasing, or use a different setting)
+            if (!_isEraser && _currentStrategy != null && _currentStrategy.StabilizationFactor > 0.001f)
+            {
+                Vector2 target = point.ToNormalized();
+                
+                // StabilizationFactor 0.1 => t=0.9 (Fast follow)
+                // StabilizationFactor 0.9 => t=0.1 (Slow/Smooth follow)
+                float t = Mathf.Clamp01(1.0f - _currentStrategy.StabilizationFactor);
+                
+                // Exponential Moving Average
+                _currentStabilizedPos = Vector2.Lerp(_currentStabilizedPos, target, t);
+                
+                // Reconstruct LogicPoint with new position but original pressure
+                pointToAdd = LogicPoint.FromNormalized(_currentStabilizedPos, point.GetNormalizedPressure());
+            }
+            else
+            {
+                // Keep sync with raw input when disabled
+                _currentStabilizedPos = point.ToNormalized();
+            }
+
+            AddPoint(pointToAdd);
         }
 
         public void EndStroke()
@@ -403,17 +434,70 @@ namespace Features.Drawing.App
                 _smoothingInputBuffer.Add(_currentStrokeRaw[count - 3]);
                 _smoothingInputBuffer.Add(_currentStrokeRaw[count - 2]);
                 _smoothingInputBuffer.Add(_currentStrokeRaw[count - 1]);
-
+                
                 _smoothingService.SmoothPoints(_smoothingInputBuffer, _smoothingOutputBuffer);
                 _renderer.DrawPoints(_smoothingOutputBuffer);
             }
             else
             {
-                // Draw point directly
                 _singlePointBuffer.Clear();
                 _singlePointBuffer.Add(point);
                 _renderer.DrawPoints(_singlePointBuffer);
             }
+        }
+
+        // --- Network Sync Helpers (Proposed) ---
+
+        /// <summary>
+        /// Handles a stroke received from the network.
+        /// This demonstrates how to sync eraser strokes without modifying the data layer structure.
+        /// </summary>
+        public void ReceiveRemoteStroke(StrokeEntity stroke)
+        {
+            if (stroke == null) return;
+
+            // 1. Identify Eraser by reserved Brush ID
+            bool isEraser = stroke.BrushId == DrawingConstants.ERASER_BRUSH_ID;
+            
+            // 2. Configure Renderer
+            // Save current state if needed (omitted for brevity, assuming idle)
+            
+            if (isEraser)
+            {
+                _renderer.SetEraser(true);
+                // Apply eraser strategy for correct blend modes
+                if (_eraserStrategy != null) _renderer.ConfigureBrush(_eraserStrategy);
+            }
+            else
+            {
+                _renderer.SetEraser(false);
+                // TODO: In a real app, you would look up the strategy by stroke.BrushId
+                _renderer.ConfigureBrush(_currentStrategy); 
+                
+                Color c = UIntToColor(stroke.ColorRGBA);
+                _renderer.SetBrushColor(c);
+            }
+            
+            _renderer.SetBrushSize(stroke.Size);
+
+            // 3. Draw and Smooth
+            // Convert IReadOnlyList to List for the helper
+            var pointsList = new List<LogicPoint>(stroke.Points);
+            DrawStrokePoints(pointsList);
+            
+            _renderer.EndStroke();
+            
+            // 4. Add to spatial index for future lookups
+            _spatialIndex.Insert(stroke);
+        }
+
+        private Color UIntToColor(uint color)
+        {
+            byte a = (byte)(color & 0xFF);
+            byte b = (byte)((color >> 8) & 0xFF);
+            byte g = (byte)((color >> 16) & 0xFF);
+            byte r = (byte)((color >> 24) & 0xFF);
+            return new Color32(r, g, b, a);
         }
     }
 }

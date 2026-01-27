@@ -41,5 +41,10 @@ namespace Features.Drawing.Domain
         [Range(0.001f, 0.5f)]
         [Tooltip("Softness of the brush edge in SDF mode. 0.001 is hard, 0.5 is very soft.")]
         public float EdgeSoftness = 0.05f;
+
+        [Header("Input Processing")]
+        [Range(0f, 0.95f)]
+        [Tooltip("Stabilization factor (0 = raw input, 0.9 = heavy smoothing/lag).")]
+        public float StabilizationFactor = 0f;
     }
 }

@@ -20,5 +20,10 @@ namespace Common.Constants
         /// Default chunk size for network packets (points per packet).
         /// </summary>
         public const int POINTS_PER_PACKET = 16;
+
+        /// <summary>
+        /// Reserved Brush ID for Eraser.
+        /// </summary>
+        public const ushort ERASER_BRUSH_ID = 0xFFFF;
     }
 }
