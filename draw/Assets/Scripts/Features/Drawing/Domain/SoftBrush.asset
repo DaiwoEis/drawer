@@ -24,3 +24,4 @@ MonoBehaviour:
   DstBlend: 10
   UseProceduralSDF: 1
   EdgeSoftness: 0.05
+  StabilizationFactor: 0.95

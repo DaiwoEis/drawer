@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   MainTexture: {fileID: 2800000, guid: 541a80968b7964824a1519fa17386002, type: 3}
   UseRuntimeGeneration: 0
-  SpacingRatio: 0.02
+  SpacingRatio: 0.001
   SizeMultiplier: 1
   RotationMode: 0
   AngleJitter: 0
@@ -23,5 +23,5 @@ MonoBehaviour:
   SrcBlend: 1
   DstBlend: 10
   UseProceduralSDF: 1
-  EdgeSoftness: 0.01
-  StabilizationFactor: 0.2
+  EdgeSoftness: 0.05
+  StabilizationFactor: 0.95

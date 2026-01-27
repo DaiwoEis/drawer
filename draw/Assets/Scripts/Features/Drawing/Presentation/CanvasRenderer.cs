@@ -40,6 +40,8 @@ namespace Features.Drawing.Presentation
         // Size Management
         private float _baseBrushSize = 50.0f; // Raw size from logic
         private float _sizeMultiplier = 1.0f; // From strategy
+        private float _strategyEdgeSoftness = 0.05f;
+        private bool _strategyUseProcedural = false;
 
         private RenderTexture _activeRT;
         private Material _brushMaterial;
@@ -340,6 +342,32 @@ namespace Features.Drawing.Presentation
             // Debug.Log($"[CanvasRenderer] SetBrushSize: {size}");
             _baseBrushSize = Mathf.Max(1.0f, size);
             _brushSize = _baseBrushSize * _sizeMultiplier;
+            UpdateDynamicMaterialProperties();
+        }
+
+        private void UpdateDynamicMaterialProperties()
+        {
+            if (_brushMaterial == null) return;
+
+            if (_strategyUseProcedural)
+            {
+                // Dynamic Softness: Ensure at least ~4.0 pixel of anti-aliasing to prevent artifacts on small brushes
+                // This fixes "jagged edges" (aliasing) when using Hard Brush at small sizes.
+                float pixelSoftness = _brushSize * _strategyEdgeSoftness;
+                float minSoftness = 4.0f; 
+                float effectiveSoftness = Mathf.Max(pixelSoftness, minSoftness);
+                
+                // Convert back to ratio (0-0.5 range usually)
+                // Clamp to 0.5 to avoid inverting the SDF (softness > radius)
+                float softnessRatio = Mathf.Min(effectiveSoftness / _brushSize, 0.5f);
+                
+                _brushMaterial.SetFloat("_EdgeSoftness", softnessRatio);
+            }
+            else
+            {
+                // For textures, we just use the configured softness (if used by shader)
+                _brushMaterial.SetFloat("_EdgeSoftness", _strategyEdgeSoftness);
+            }
         }
 
         public void SetBrushColor(Color color)
@@ -411,8 +439,12 @@ namespace Features.Drawing.Presentation
                 _brushMaterial.SetInt("_DstBlend", (int)strategy.DstBlend);
                 
                 // 4. Procedural SDF Settings
+                _strategyUseProcedural = strategy.UseProceduralSDF;
+                _strategyEdgeSoftness = strategy.EdgeSoftness;
+
                 _brushMaterial.SetFloat("_UseProcedural", strategy.UseProceduralSDF ? 1.0f : 0.0f);
-                _brushMaterial.SetFloat("_EdgeSoftness", strategy.EdgeSoftness);
+                // _EdgeSoftness is now set by UpdateDynamicMaterialProperties
+                UpdateDynamicMaterialProperties();
 
                 // Force update material keywords if needed (Standard shader relies on this, custom shader might not)
                 // But let's log to be sure
