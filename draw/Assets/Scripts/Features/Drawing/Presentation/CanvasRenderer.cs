@@ -28,6 +28,7 @@ namespace Features.Drawing.Presentation
         [SerializeField] private Vector2Int _resolution = new Vector2Int(2048, 2048);
         [SerializeField] private RawImage _displayImage; // UI to display the RT
         [SerializeField] private Shader _brushShader;
+        [SerializeField] private ShaderVariantCollection _shaderVariants; // Pre-warm shaders
         [SerializeField] private Texture2D _defaultBrushTip;
 
         [Header("Runtime Debug")]
@@ -44,6 +45,7 @@ namespace Features.Drawing.Presentation
         private bool _strategyUseProcedural = false;
 
         public Vector2Int Resolution => _layoutController != null ? _layoutController.Resolution : _resolution;
+        public event System.Action<Vector2Int> OnResolutionChanged;
 
         // RenderTextures managed by CanvasLayoutController
         private bool _isBaking = false;
@@ -161,6 +163,13 @@ namespace Features.Drawing.Presentation
         private void InitializeGraphics()
         {
             _layoutController.Initialize();
+            _layoutController.OnLayoutChanged += () => OnResolutionChanged?.Invoke(_layoutController.Resolution);
+
+            // 1. Pre-warm Shaders
+            if (_shaderVariants != null)
+            {
+                _shaderVariants.WarmUp();
+            }
 
             // 2. Setup Material
             if (_brushShader == null) 
@@ -169,8 +178,11 @@ namespace Features.Drawing.Presentation
             if (_brushShader == null)
             {
                 Debug.LogError("[CanvasRenderer] CRITICAL: Brush Shader NOT FOUND!");
+                return;
             }
 
+            // Clean up existing material if any (re-init safety)
+            if (_brushMaterial != null) Destroy(_brushMaterial);
             _brushMaterial = new Material(_brushShader);
             if (_defaultBrushTip != null)
                 _brushMaterial.mainTexture = _defaultBrushTip;

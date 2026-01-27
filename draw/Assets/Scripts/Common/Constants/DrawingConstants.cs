@@ -25,5 +25,11 @@ namespace Common.Constants
         /// Reserved Brush ID for Eraser.
         /// </summary>
         public const ushort ERASER_BRUSH_ID = 0xFFFF;
+
+        /// <summary>
+        /// Approximate scaling factor to convert pixel size to LogicPoint coordinate space (0-65535).
+        /// Based on a reference resolution of 2000px.
+        /// </summary>
+        public const float LOGIC_TO_WORLD_RATIO = 65535f / 2000f;
     }
 }

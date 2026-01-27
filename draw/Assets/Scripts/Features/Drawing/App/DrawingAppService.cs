@@ -53,6 +53,7 @@ namespace Features.Drawing.App
         private List<LogicPoint> _smoothingInputBuffer = new List<LogicPoint>(8);
         private List<LogicPoint> _smoothingOutputBuffer = new List<LogicPoint>(64);
         private List<LogicPoint> _singlePointBuffer = new List<LogicPoint>(1);
+        private readonly LogicPoint[] _singlePointArray = new LogicPoint[1];
 
         // Current stroke state capturing
         private Texture2D _currentRuntimeTexture;
@@ -60,24 +61,79 @@ namespace Features.Drawing.App
 
         private StrokeCollisionService _collisionService;
         
+        private float _logicToWorldRatio = DrawingConstants.LOGIC_TO_WORLD_RATIO;
+
         // Events
         public event System.Action OnStrokeStarted;
 
         private void Awake()
         {
+            // 1. Resolve Renderer (Priority: Inspector -> FindObjectOfType)
             if (_concreteRenderer == null) 
                 _concreteRenderer = FindObjectOfType<Features.Drawing.Presentation.CanvasRenderer>();
                 
-            _renderer = _concreteRenderer as IStrokeRenderer;
+            IStrokeRenderer renderer = _concreteRenderer as IStrokeRenderer;
             
-            if (_renderer == null)
+            if (renderer == null)
             {
                 Debug.LogError("DrawingAppService: CanvasRenderer does not implement IStrokeRenderer!");
             }
             
-            _smoothingService = new StrokeSmoothingService();
-            _collisionService = new StrokeCollisionService();
-            _historyManager = new DrawingHistoryManager(_renderer, _smoothingService, _collisionService);
+            // 2. Initialize with defaults (Dependency Injection Fallback)
+            // If dependencies were not injected via Construct(), we create them here.
+            Initialize(renderer, null, null, null);
+        }
+
+        /// <summary>
+        /// Dependency Injection Entry Point.
+        /// Allows external systems (Zenject/Tests) to inject mock or specific implementations.
+        /// </summary>
+        public void Initialize(
+            IStrokeRenderer renderer,
+            StrokeSmoothingService smoothingService = null,
+            StrokeCollisionService collisionService = null,
+            DrawingHistoryManager historyManager = null)
+        {
+            // Only set if not null (allow partial injection logic if needed, though usually all or nothing)
+            if (_renderer == null) _renderer = renderer;
+            
+            // Lazy init services if not provided
+            if (_smoothingService == null) 
+                _smoothingService = smoothingService ?? new StrokeSmoothingService();
+                
+            if (_collisionService == null) 
+                _collisionService = collisionService ?? new StrokeCollisionService();
+            
+            // HistoryManager depends on others
+            if (_historyManager == null) 
+                _historyManager = historyManager ?? new DrawingHistoryManager(_renderer, _smoothingService, _collisionService);
+
+            // 3. Setup Resolution Handling
+            if (_renderer is Features.Drawing.Presentation.CanvasRenderer concreteRenderer)
+            {
+                concreteRenderer.OnResolutionChanged += UpdateResolutionRatio;
+                UpdateResolutionRatio(concreteRenderer.Resolution);
+            }
+        }
+
+        private void UpdateResolutionRatio(Vector2Int resolution)
+        {
+            // Calculate ratio based on logical resolution (65536) and max screen dimension
+            // LogicPoint Space: 0-65535
+            // Pixel Space: 0-Resolution
+            // Ratio = 65535 / MaxDimension
+            
+            float maxDim = Mathf.Max(resolution.x, resolution.y);
+            if (maxDim > 0)
+            {
+                _logicToWorldRatio = DrawingConstants.LOGICAL_RESOLUTION / maxDim;
+            }
+            else
+            {
+                _logicToWorldRatio = DrawingConstants.LOGIC_TO_WORLD_RATIO; // Fallback
+            }
+
+            _collisionService?.SetLogicToWorldRatio(_logicToWorldRatio);
         }
 
         // --- Synchronization / Serialization Support ---
@@ -262,7 +318,7 @@ namespace Features.Drawing.App
                 // Assuming 1920px screen ~ 65535 units => factor ~ 34.
                 // Threshold: 10% of brush size.
                 // If brush is 20px, threshold is 2px ~ 70 units.
-                float scale = 65535f / 2000f; // Approx
+                float scale = DrawingConstants.LOGIC_TO_WORLD_RATIO;
                 float threshold = (_currentSize * 0.1f) * scale;
                 
                 // Use squared distance for perf
@@ -443,7 +499,9 @@ namespace Features.Drawing.App
             
             if (_currentStroke != null)
             {
-                _currentStroke.AddPoints(new LogicPoint[] { point });
+                // Optimization: Use pre-allocated array to avoid GC allocation per point
+                _singlePointArray[0] = point;
+                _currentStroke.AddPoints(_singlePointArray);
             }
 
             int count = _currentStrokeRaw.Count;

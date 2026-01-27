@@ -11,9 +11,17 @@ namespace Features.Drawing.Service
     {
         private readonly StrokeSpatialIndex _spatialIndex;
 
+        // Dynamic ratio, initialized to default but updateable via SetLogicToWorldRatio
+        private float _logicToWorldRatio = DrawingConstants.LOGIC_TO_WORLD_RATIO;
+
         public StrokeCollisionService()
         {
             _spatialIndex = new StrokeSpatialIndex();
+        }
+
+        public void SetLogicToWorldRatio(float ratio)
+        {
+            _logicToWorldRatio = ratio;
         }
 
         public void Insert(StrokeEntity stroke)
@@ -61,7 +69,7 @@ namespace Features.Drawing.Service
                 return false;
             }
 
-            float scale = 65535f / 2000f; // Approx scale factor
+            float scale = _logicToWorldRatio;
             float eraserRadius = eraserStroke.Size * 0.5f;
 
             // Iterate over sample points of the current eraser
