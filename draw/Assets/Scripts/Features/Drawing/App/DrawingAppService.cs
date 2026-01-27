@@ -11,6 +11,7 @@ using Features.Drawing.Domain.Entity;
 using Common.Constants;
 using Features.Drawing.App.Command;
 using Features.Drawing.App.Interface;
+using Common.Diagnostics;
 
 namespace Features.Drawing.App
 {
@@ -24,6 +25,13 @@ namespace Features.Drawing.App
         [SerializeField] private Features.Drawing.Presentation.CanvasRenderer _concreteRenderer; 
         [SerializeField] private BrushStrategy _eraserStrategy; // Hard brush for eraser
         
+        [Header("Diagnostics")]
+        [SerializeField] private bool _enableDiagnostics = true;
+
+        private IStructuredLogger _logger;
+        private PerformanceMonitor _perfMonitor;
+        private TraceContext _activeStrokeTrace;
+
         // State
         private Color _currentColor = Color.black;
         private float _currentSize = 10f;
@@ -81,7 +89,17 @@ namespace Features.Drawing.App
             
             // 2. Initialize with defaults (Dependency Injection Fallback)
             // If dependencies were not injected via Construct(), we create them here.
-            Initialize(renderer, null, null, null);
+            // Create default logger if diagnostics enabled
+            IStructuredLogger logger = null;
+            if (_enableDiagnostics)
+            {
+                logger = new StructuredLogger("DrawingApp", 10, true);
+                // Attach PerformanceMonitor
+                _perfMonitor = gameObject.AddComponent<PerformanceMonitor>();
+                _perfMonitor.Initialize(logger);
+            }
+
+            Initialize(renderer, null, null, null, logger);
         }
 
         /// <summary>
@@ -92,11 +110,15 @@ namespace Features.Drawing.App
             IStrokeRenderer renderer,
             StrokeSmoothingService smoothingService = null,
             StrokeCollisionService collisionService = null,
-            DrawingHistoryManager historyManager = null)
+            DrawingHistoryManager historyManager = null,
+            IStructuredLogger logger = null)
         {
             // Only set if not null (allow partial injection logic if needed, though usually all or nothing)
             if (_renderer == null) _renderer = renderer;
             
+            // Diagnostics
+            if (_logger == null) _logger = logger;
+
             // Lazy init services if not provided
             if (_smoothingService == null) 
                 _smoothingService = smoothingService ?? new StrokeSmoothingService();
@@ -266,6 +288,19 @@ namespace Features.Drawing.App
 
         public void StartStroke(LogicPoint point)
         {
+            // Diagnostics
+            _activeStrokeTrace = TraceContext.New();
+            if (_logger != null)
+            {
+                var meta = new Dictionary<string, object> 
+                { 
+                    { "isEraser", _isEraser },
+                    { "size", _currentSize },
+                    { "color", _currentColor }
+                };
+                _logger.Info("StrokeStarted", _activeStrokeTrace, meta);
+            }
+
             // Notify listeners (e.g. UI to close panels)
             OnStrokeStarted?.Invoke();
             
@@ -318,7 +353,7 @@ namespace Features.Drawing.App
                 // Assuming 1920px screen ~ 65535 units => factor ~ 34.
                 // Threshold: 10% of brush size.
                 // If brush is 20px, threshold is 2px ~ 70 units.
-                float scale = DrawingConstants.LOGIC_TO_WORLD_RATIO;
+                float scale = _logicToWorldRatio;
                 float threshold = (_currentSize * 0.1f) * scale;
                 
                 // Use squared distance for perf
