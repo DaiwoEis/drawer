@@ -143,23 +143,31 @@ namespace Features.Drawing.Presentation.UI
         private void Update()
         {
             // Keyboard Shortcuts
+            // Only trigger if no input field is focused (basic check, can be improved)
+            // Fix: Check for KeyDown to avoid multiple triggers per frame, which is correct here.
+            // But verify if the event system might be processing it multiple times or if Update is called excessively?
+            // Standard Update is once per frame. Input.GetKeyDown is true for one frame.
+            
             bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.LeftCommand);
             bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
 
-            if (ctrl && Input.GetKeyDown(KeyCode.Z))
+            if (ctrl)
             {
-                if (shift)
+                if (Input.GetKeyDown(KeyCode.Z))
+                {
+                    if (shift)
+                    {
+                        _appService.Redo();
+                    }
+                    else
+                    {
+                        _appService.Undo();
+                    }
+                }
+                else if (Input.GetKeyDown(KeyCode.Y))
                 {
                     _appService.Redo();
                 }
-                else
-                {
-                    _appService.Undo();
-                }
-            }
-            else if (ctrl && Input.GetKeyDown(KeyCode.Y))
-            {
-                _appService.Redo();
             }
         }
 

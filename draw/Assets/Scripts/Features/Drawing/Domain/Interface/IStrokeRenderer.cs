@@ -13,5 +13,9 @@ namespace Features.Drawing.Domain.Interface
         void DrawPoints(IEnumerable<LogicPoint> points);
         void EndStroke();
         void ClearCanvas();
+        
+        // History/Snapshot Support
+        void SetBakingMode(bool enabled);
+        void RestoreFromBackBuffer();
     }
 }

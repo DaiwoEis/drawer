@@ -167,10 +167,10 @@ namespace Features.Drawing.Presentation
 
         public void Dispose()
         {
-            _inputBuffer?.Release();
-            _distBuffer?.Release();
-            _outputBuffer?.Release();
-            _argsBuffer?.Release();
+            if (_inputBuffer != null) { _inputBuffer.Release(); _inputBuffer = null; }
+            if (_distBuffer != null) { _distBuffer.Release(); _distBuffer = null; }
+            if (_outputBuffer != null) { _outputBuffer.Release(); _outputBuffer = null; }
+            if (_argsBuffer != null) { _argsBuffer.Release(); _argsBuffer = null; }
         }
     }
 }

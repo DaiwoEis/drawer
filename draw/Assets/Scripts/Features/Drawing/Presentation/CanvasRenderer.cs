@@ -44,6 +44,9 @@ namespace Features.Drawing.Presentation
         private bool _strategyUseProcedural = false;
 
         private RenderTexture _activeRT;
+        private RenderTexture _bakedRT; // BackBuffer for history snapshot
+        private bool _isBaking = false;
+
         private Material _brushMaterial;
         private CommandBuffer _cmd;
         private Mesh _quadMesh; // Reused quad mesh
@@ -73,18 +76,7 @@ namespace Features.Drawing.Presentation
                 Camera.main.clearFlags = CameraClearFlags.SolidColor;
             }
 
-            // Try load Compute Shader
-            var shader = Resources.Load<ComputeShader>("Shaders/StrokeGeneration");
-            if (shader != null)
-            {
-                _gpuStampGenerator = new GpuStrokeStampGenerator(shader);
-                Debug.Log("[CanvasRenderer] GPU Stroke Generation Enabled.");
-            }
-            else
-            {
-                Debug.LogWarning("[CanvasRenderer] Compute Shader not found in Resources/Shaders/StrokeGeneration. Falling back to CPU.");
-                _useGpuStamping = false;
-            }
+            InitializeGpuGenerator();
 
             if (_baseMaxDimension <= 0)
             {
@@ -93,10 +85,39 @@ namespace Features.Drawing.Presentation
 
             InitializeGraphics();
             UpdateStampGeneratorScaleIfNeeded();
-            
-            // Fix UI Premultiplied Alpha Issue
-            // Reverted: Changing RenderMode broke Input. Using Material Blend Mode fix instead.
-            // if (_displayImage != null) ...
+        }
+
+        private void InitializeGpuGenerator()
+        {
+            if (_gpuStampGenerator != null) return;
+
+            // Try load Compute Shader
+            var shader = Resources.Load<ComputeShader>("Shaders/StrokeGeneration");
+            if (shader != null)
+            {
+                _gpuStampGenerator = new GpuStrokeStampGenerator(shader);
+                // Debug.Log("[CanvasRenderer] GPU Stroke Generation Enabled.");
+                _useGpuStamping = true;
+            }
+            else
+            {
+                Debug.LogWarning("[CanvasRenderer] Compute Shader not found in Resources/Shaders/StrokeGeneration. Falling back to CPU.");
+                _useGpuStamping = false;
+            }
+        }
+
+        private void OnEnable()
+        {
+            InitializeGpuGenerator();
+        }
+
+        private void OnDisable()
+        {
+            if (_gpuStampGenerator != null)
+            {
+                _gpuStampGenerator.Dispose();
+                _gpuStampGenerator = null;
+            }
         }
 
         private void OnRectTransformDimensionsChange()
@@ -108,11 +129,19 @@ namespace Features.Drawing.Presentation
         {
             if (_activeRT != null) _activeRT.Release();
             if (_activeRT != null) Destroy(_activeRT);
+            if (_bakedRT != null) _bakedRT.Release();
+            if (_bakedRT != null) Destroy(_bakedRT);
             if (_cmd != null) _cmd.Release();
             if (_brushMaterial != null) Destroy(_brushMaterial);
             // Don't destroy _quadMesh if it's a primitive, but if we created it:
             if (_quadMesh != null) Destroy(_quadMesh);
-            if (_gpuStampGenerator != null) _gpuStampGenerator.Dispose();
+            
+            // Already handled in OnDisable, but double check
+            if (_gpuStampGenerator != null)
+            {
+                _gpuStampGenerator.Dispose();
+                _gpuStampGenerator = null;
+            }
         }
 
         private void InitializeGraphics()
@@ -146,6 +175,23 @@ namespace Features.Drawing.Presentation
 
             // 1. Setup RenderTexture
             RebuildRenderTexture(_resolution, false);
+            
+            // Rebuild BakedRT as well
+            if (_bakedRT != null)
+            {
+                _bakedRT.Release();
+                Destroy(_bakedRT);
+            }
+            _bakedRT = new RenderTexture(_resolution.x, _resolution.y, 0, RenderTextureFormat.ARGB32);
+            _bakedRT.filterMode = FilterMode.Bilinear;
+            _bakedRT.useMipMap = false;
+            _bakedRT.Create();
+            
+            // Clear BakedRT to transparent
+            var prev = RenderTexture.active;
+            RenderTexture.active = _bakedRT;
+            GL.Clear(true, true, Color.clear);
+            RenderTexture.active = prev;
 
             // 2. Setup Material
             if (_brushShader == null) 
@@ -478,7 +524,7 @@ namespace Features.Drawing.Presentation
             }
             // ELSE: Do NOT force override blend modes. Trust the state set by ConfigureBrush.
             
-            _cmd.SetRenderTarget(_activeRT);
+            _cmd.SetRenderTarget(_isBaking ? _bakedRT : _activeRT);
 
             // Prepare PropertyBlock for color
             Color drawColor = _isEraser ? new Color(0,0,0,1) : _brushColor; 
@@ -549,7 +595,8 @@ namespace Features.Drawing.Presentation
         
         public void ClearCanvas()
         {
-            Graphics.SetRenderTarget(_activeRT);
+            var target = _isBaking ? _bakedRT : _activeRT;
+            Graphics.SetRenderTarget(target);
             GL.Clear(true, true, Color.clear);
             
             // Reset state
@@ -561,6 +608,17 @@ namespace Features.Drawing.Presentation
         {
             _stampGenerator.Reset();
             if (_gpuStampGenerator != null) _gpuStampGenerator.Reset();
+        }
+
+        public void SetBakingMode(bool enabled)
+        {
+            _isBaking = enabled;
+        }
+
+        public void RestoreFromBackBuffer()
+        {
+            if (_bakedRT == null || _activeRT == null) return;
+            Graphics.Blit(_bakedRT, _activeRT);
         }
     }
 }
