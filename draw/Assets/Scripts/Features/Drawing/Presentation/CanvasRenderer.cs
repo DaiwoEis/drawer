@@ -64,6 +64,14 @@ namespace Features.Drawing.Presentation
 
         private CanvasLayoutController _layoutController;
 
+        // Runtime Optimization
+        private bool _forceCpuMode = false;
+        public bool ForceCpuMode 
+        { 
+            get => _forceCpuMode; 
+            set => _forceCpuMode = value; 
+        }
+
         private void Awake()
         {
             // Fix background color (User requirement: White, not Blue)
@@ -73,10 +81,18 @@ namespace Features.Drawing.Presentation
                 Camera.main.clearFlags = CameraClearFlags.SolidColor;
             }
 
+            // Start initialization coroutine
+            StartCoroutine(InitializeRoutine());
+        }
+
+        private System.Collections.IEnumerator InitializeRoutine()
+        {
             InitializeGpuGenerator();
+            yield return null;
 
             _layoutController = new CanvasLayoutController(_displayImage, _resolution, 0);
             _layoutController.OnLayoutChanged += OnLayoutChanged;
+            yield return null;
 
             InitializeGraphics();
         }
@@ -366,7 +382,7 @@ namespace Features.Drawing.Presentation
             if (points is ICollection<LogicPoint> col) pointsCount = col.Count;
             else { foreach(var _ in points) pointsCount++; }
 
-            bool shouldTryGpu = _useGpuStamping && _gpuStampGenerator != null && pointsCount > 10;
+            bool shouldTryGpu = !_forceCpuMode && _useGpuStamping && _gpuStampGenerator != null && pointsCount > 10;
 
             if (shouldTryGpu)
             {

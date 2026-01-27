@@ -10,6 +10,7 @@ namespace Features.Drawing.App.Command
     public class DrawStrokeCommand : ICommand
     {
         public string Id { get; }
+        public long SequenceId { get; }
         private readonly List<LogicPoint> _points;
         private readonly BrushStrategy _strategy;
         private readonly Texture2D _runtimeTexture;
@@ -17,9 +18,10 @@ namespace Features.Drawing.App.Command
         private readonly float _size;
         private readonly bool _isEraser;
 
-        public DrawStrokeCommand(string id, List<LogicPoint> points, BrushStrategy strategy, Texture2D runtimeTexture, Color color, float size, bool isEraser)
+        public DrawStrokeCommand(string id, long sequenceId, List<LogicPoint> points, BrushStrategy strategy, Texture2D runtimeTexture, Color color, float size, bool isEraser)
         {
             Id = id;
+            SequenceId = sequenceId;
             _points = new List<LogicPoint>(points); // Clone to ensure immutability
             _strategy = strategy;
             _runtimeTexture = runtimeTexture;

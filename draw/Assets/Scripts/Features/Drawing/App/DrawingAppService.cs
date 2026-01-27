@@ -197,7 +197,7 @@ namespace Features.Drawing.App
         public void ClearCanvas()
         {
             // Create a clear command
-            var cmd = new ClearCanvasCommand();
+            var cmd = new ClearCanvasCommand(_nextSequenceId++);
             
             // Execute immediately
             cmd.Execute(_renderer, _smoothingService);
@@ -336,6 +336,7 @@ namespace Features.Drawing.App
 
                 var cmd = new DrawStrokeCommand(
                     _currentStroke.Id.ToString(),
+                    _currentStroke.SequenceId,
                     new List<LogicPoint>(_currentStroke.Points),
                     strategyToUse,
                     _currentRuntimeTexture,

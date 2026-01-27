@@ -136,6 +136,45 @@ namespace Features.Drawing.Service
         }
 
         /// <summary>
+        /// Gets incremental history updates (commands added after the given lastSequenceId).
+        /// Returns all commands if lastSequenceId is not found or history is diverged.
+        /// </summary>
+        public List<ICommand> GetIncrementalHistory(long lastSequenceId)
+        {
+            var incrementalList = new List<ICommand>();
+            
+            // Check Active History first (most likely)
+            int index = _history.FindIndex(c => c.SequenceId == lastSequenceId);
+            if (index != -1)
+            {
+                // Found in active history, return everything after it
+                if (index + 1 < _history.Count)
+                {
+                    incrementalList.AddRange(_history.GetRange(index + 1, _history.Count - (index + 1)));
+                }
+                return incrementalList;
+            }
+
+            // Check Archived History
+            index = _archivedHistory.FindIndex(c => c.SequenceId == lastSequenceId);
+            if (index != -1)
+            {
+                // Found in archive
+                // Add remaining archive
+                if (index + 1 < _archivedHistory.Count)
+                {
+                    incrementalList.AddRange(_archivedHistory.GetRange(index + 1, _archivedHistory.Count - (index + 1)));
+                }
+                // Add all active
+                incrementalList.AddRange(_history);
+                return incrementalList;
+            }
+
+            // Fallback: Full Sync if ID not found (client is too far behind or diverged)
+            return GetFullHistory();
+        }
+
+        /// <summary>
         /// Replaces the current local history with a remote authoritative history.
         /// </summary>
         public void ReplaceHistory(List<ICommand> remoteHistory)
