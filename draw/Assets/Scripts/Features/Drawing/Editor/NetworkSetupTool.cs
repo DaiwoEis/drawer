@@ -56,8 +56,16 @@ namespace Features.Drawing.Editor.Tools
             var soGhost = new SerializedObject(ghostRenderer);
             soGhost.FindProperty("_mainRenderer").objectReferenceValue = mainRenderer;
             soGhost.FindProperty("_displayImage").objectReferenceValue = rawImage;
+            
             // Try to find default brush texture if null
-            // soGhost.FindProperty("_defaultBrushTip").objectReferenceValue = ...; 
+            var defaultBrush = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Resources/DefaultBrush.png");
+            if (defaultBrush == null) defaultBrush = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Resources/SoftBrush.png");
+            
+            if (defaultBrush != null)
+            {
+                 soGhost.FindProperty("_defaultBrushTip").objectReferenceValue = defaultBrush;
+            }
+            
             soGhost.ApplyModifiedProperties();
 
             // Wire DrawingAppService
@@ -77,6 +85,13 @@ namespace Features.Drawing.Editor.Tools
             soBoot.FindProperty("_netService").objectReferenceValue = netService;
             soBoot.FindProperty("_client").objectReferenceValue = mockClient;
             soBoot.ApplyModifiedProperties();
+
+            // 5. Auto-Update Brush Registry (Ensure Mock mode works out of the box)
+            BrushRegistryTool.UpdateBrushRegistry();
+            
+            // Verify registry
+            // var appServiceCheck = soApp.targetObject as DrawingAppService;
+            // We can't access private field easily here to log, but BrushRegistryTool logs count.
 
             Selection.activeGameObject = netGo;
             Debug.Log("Network Setup Complete! Created 'NetworkManager' with MockClient, Service, and GhostRenderer.");

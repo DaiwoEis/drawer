@@ -268,9 +268,9 @@ namespace Features.Drawing.App
             _currentStroke = new StrokeEntity(id, 0, brushId, seed, colorInt, _inputState.CurrentSize, _nextSequenceId++);
 
             // Network Sync: Begin Stroke
-            if (_networkService != null)
+            if (_networkService != null && _networkService.isActiveAndEnabled)
             {
-                _networkService.OnLocalStrokeStarted(id, _inputState.CurrentStrategy, _inputState.CurrentColor, _inputState.CurrentSize, _inputState.IsEraser);
+                _networkService.OnLocalStrokeStarted(id, brushId, _inputState.CurrentColor, _inputState.CurrentSize, _inputState.IsEraser);
             }
 
             _lastAddedPoint = point;
@@ -329,7 +329,7 @@ namespace Features.Drawing.App
             _lastAddedPoint = pointToAdd;
             
             // Network Sync: Move Stroke
-            if (_networkService != null)
+            if (_networkService != null && _networkService.isActiveAndEnabled)
             {
                 _networkService.OnLocalStrokeMoved(pointToAdd);
             }
@@ -383,7 +383,7 @@ namespace Features.Drawing.App
                 _collisionService.Insert(_currentStroke);
 
                 // Network Sync: End Stroke
-                if (_networkService != null)
+                if (_networkService != null && _networkService.isActiveAndEnabled)
                 {
                     // Calculate a checksum if needed, for now just pass 0
                     // Count is useful
@@ -589,9 +589,9 @@ namespace Features.Drawing.App
             _collisionService.Insert(stroke);
             
             // Diagnostics
-            if (_logger != null)
+            if (_logger != null && _enableDiagnostics) // Only log if explicitly enabled
             {
-                 _logger.Info("RemoteStrokeCommitted", Common.Diagnostics.TraceContext.New(), new Dictionary<string, object> { { "id", stroke.Id }, { "points", stroke.Points.Count } });
+                 // _logger.Info("RemoteStrokeCommitted", Common.Diagnostics.TraceContext.New(), new Dictionary<string, object> { { "id", stroke.Id }, { "points", stroke.Points.Count } });
             }
         }
         
@@ -636,28 +636,44 @@ namespace Features.Drawing.App
         public BrushStrategy GetBrushStrategy(ushort id)
         {
             if (id == DrawingConstants.ERASER_BRUSH_ID) return _eraserStrategy;
+            if (id == DrawingConstants.UNKNOWN_BRUSH_ID)
+            {
+                Debug.LogWarning($"[DrawingAppService] Received UNKNOWN_BRUSH_ID. Falling back to current local strategy: {_inputState.CurrentStrategy?.name}");
+                return _inputState.CurrentStrategy;
+            }
+
             if (_registeredBrushes != null && id < _registeredBrushes.Length)
             {
+                // Debug.Log($"[DrawingAppService] Resolved Brush ID {id} to '{_registeredBrushes[id].name}'");
                 return _registeredBrushes[id];
             }
-            // Fallback
+            
+            Debug.LogWarning($"[DrawingAppService] Brush ID {id} out of bounds (Count: {_registeredBrushes?.Length ?? 0}). Fallback to default.");
+
+            // Fallback for valid but out-of-bounds IDs (should not happen if registry is consistent)
             if (_registeredBrushes != null && _registeredBrushes.Length > 0) return _registeredBrushes[0];
+            
             return _inputState.CurrentStrategy; // Last resort
         }
 
         private ushort GetBrushId(BrushStrategy strategy)
         {
             if (_inputState.IsEraser) return DrawingConstants.ERASER_BRUSH_ID;
-            // Or check equality with eraser strategy
             
             if (_registeredBrushes != null)
             {
                 for (int i = 0; i < _registeredBrushes.Length; i++)
                 {
-                    if (_registeredBrushes[i] == strategy) return (ushort)i;
+                    if (_registeredBrushes[i] == strategy) 
+                    {
+                        // Debug.Log($"[DrawingAppService] Found ID {i} for brush '{strategy.name}'");
+                        return (ushort)i;
+                    }
                 }
             }
-            return 0;
+            
+            Debug.LogWarning($"[DrawingAppService] Brush '{strategy.name}' NOT FOUND in registry! Current Registry: {string.Join(", ", _registeredBrushes != null ? System.Linq.Enumerable.Select(_registeredBrushes, b => b.name) : new string[0])}");
+            return DrawingConstants.UNKNOWN_BRUSH_ID;
         }
     }
 }

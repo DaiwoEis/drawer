@@ -14,22 +14,22 @@ namespace Features.Drawing.Service.Network
 
         public void SendBeginStroke(BeginStrokePacket packet)
         {
-            if (_loopback) StartCoroutine(SimulateReceive(packet));
+            if (_loopback && isActiveAndEnabled) StartCoroutine(SimulateReceive(packet));
         }
 
         public void SendUpdateStroke(UpdateStrokePacket packet)
         {
-            if (_loopback) StartCoroutine(SimulateReceive(packet));
+            if (_loopback && isActiveAndEnabled) StartCoroutine(SimulateReceive(packet));
         }
 
         public void SendEndStroke(EndStrokePacket packet)
         {
-            if (_loopback) StartCoroutine(SimulateReceive(packet));
+            if (_loopback && isActiveAndEnabled) StartCoroutine(SimulateReceive(packet));
         }
 
         public void SendAbortStroke(AbortStrokePacket packet)
         {
-            if (_loopback) StartCoroutine(SimulateReceive(packet));
+            if (_loopback && isActiveAndEnabled) StartCoroutine(SimulateReceive(packet));
         }
 
         private System.Collections.IEnumerator SimulateReceive(object packet)

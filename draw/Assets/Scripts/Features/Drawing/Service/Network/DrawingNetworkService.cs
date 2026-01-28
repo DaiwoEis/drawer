@@ -51,7 +51,7 @@ namespace Features.Drawing.Service.Network
 
         // --- Outbound (Sending) ---
 
-        public void OnLocalStrokeStarted(uint strokeId, BrushStrategy strategy, Color color, float size, bool isEraser)
+        public void OnLocalStrokeStarted(uint strokeId, ushort brushId, Color color, float size, bool isEraser)
         {
             if (_networkClient == null) return;
 
@@ -63,10 +63,14 @@ namespace Features.Drawing.Service.Network
             _lastSentPayload = null;
 
             // Construct Begin Packet
+            ushort resolvedBrushId = isEraser
+                ? Common.Constants.DrawingConstants.ERASER_BRUSH_ID
+                : brushId;
+
             var packet = new BeginStrokePacket
             {
                 StrokeId = strokeId,
-                BrushId = isEraser ? (ushort)1 : (ushort)0, // Simplified mapping
+                BrushId = resolvedBrushId,
                 Color = ColorToUInt(color),
                 Size = size,
                 Seed = 0 // TODO: Add seed to app service if needed
@@ -209,7 +213,7 @@ namespace Features.Drawing.Service.Network
             // Setup Renderer
             // Map packet data to BrushStrategy
             // For now, we create a temporary strategy or use default
-            bool isEraser = packet.BrushId == 1;
+            bool isEraser = packet.BrushId == Common.Constants.DrawingConstants.ERASER_BRUSH_ID;
             
             // We need to configure the GhostRenderer for this specific stroke?
             // Wait, GhostRenderer is a single component. If multiple people draw at once?

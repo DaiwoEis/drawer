@@ -41,6 +41,7 @@ namespace Features.Drawing.Service.Network
         public void SetMetadata(BeginStrokePacket metadata)
         {
             Metadata = metadata;
+            // Debug.Log($"[RemoteStrokeContext] SetMetadata: ID={Metadata.StrokeId}, BrushId={Metadata.BrushId}, Size={Metadata.Size}");
         }
 
         // Prediction State
@@ -162,7 +163,7 @@ namespace Features.Drawing.Service.Network
                 // We'll interpret it here.
                 color = DrawingNetworkService.UIntToColor(Metadata.Color);
                 size = Metadata.Size;
-                isEraser = Metadata.BrushId == 1;
+                isEraser = Metadata.BrushId == Common.Constants.DrawingConstants.ERASER_BRUSH_ID;
             }
 
             _ghostRenderer.DrawGhostStroke(pointsToDraw, size, color, isEraser, _strategy);

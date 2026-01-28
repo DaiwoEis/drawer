@@ -78,7 +78,7 @@ namespace Common.Diagnostics
                         // Direct log without console echo to avoid spamming Unity Console
                         // We cast to access the raw Log method or rely on the implementation's config
                         // For this demo, we just log it.
-                        _logger.Info("PerformanceHeartbeat", default, metadata);
+                        // _logger.Info("PerformanceHeartbeat", default, metadata);
                     }
                 }
             }

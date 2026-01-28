@@ -27,6 +27,11 @@ namespace Common.Constants
         public const ushort ERASER_BRUSH_ID = 0xFFFF;
 
         /// <summary>
+        /// Reserved Brush ID for Unknown/Unregistered brushes (Fallback).
+        /// </summary>
+        public const ushort UNKNOWN_BRUSH_ID = 0xFFFE;
+
+        /// <summary>
         /// Approximate scaling factor to convert pixel size to LogicPoint coordinate space (0-65535).
         /// Based on a reference resolution of 2000px.
         /// </summary>
