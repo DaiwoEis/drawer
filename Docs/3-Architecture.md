@@ -20,6 +20,7 @@ graph TD
         HistoryManager[DrawingHistoryManager]
         CollisionService[StrokeCollisionService]
         SmoothingService[StrokeSmoothingService]
+        NetworkService[DrawingNetworkService]
     end
 
     subgraph Domain Layer [领域核心层]
@@ -32,6 +33,8 @@ graph TD
     DrawingAppService --> HistoryManager
     DrawingAppService --> CollisionService
     DrawingAppService --> CanvasRenderer
+    DrawingAppService --> NetworkService
+    NetworkService --> Entity
     HistoryManager --> CommandSystem
     CanvasRenderer --> Entity
 ```

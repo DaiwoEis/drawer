@@ -71,6 +71,9 @@ namespace Features.Drawing.App
         
         private float _logicToWorldRatio = DrawingConstants.LOGIC_TO_WORLD_RATIO;
 
+        // Network Integration
+        private Features.Drawing.Service.Network.DrawingNetworkService _networkService;
+
         // Events
         public event System.Action OnStrokeStarted;
 
@@ -100,6 +103,11 @@ namespace Features.Drawing.App
             }
 
             Initialize(renderer, null, null, null, logger);
+        }
+
+        public void SetNetworkService(Features.Drawing.Service.Network.DrawingNetworkService networkService)
+        {
+            _networkService = networkService;
         }
 
         /// <summary>
@@ -336,6 +344,12 @@ namespace Features.Drawing.App
             
             _currentStroke = new StrokeEntity(id, 0, brushId, seed, colorInt, _currentSize, _nextSequenceId++);
 
+            // Network Sync: Begin Stroke
+            if (_networkService != null)
+            {
+                _networkService.OnLocalStrokeStarted(id, _currentStrategy, _currentColor, _currentSize, _isEraser);
+            }
+
             _lastAddedPoint = point;
             AddPoint(point);
             _currentStabilizedPos = point.ToNormalized();
@@ -390,9 +404,13 @@ namespace Features.Drawing.App
 
             AddPoint(pointToAdd);
             _lastAddedPoint = pointToAdd;
+            
+            // Network Sync: Move Stroke
+            if (_networkService != null)
+            {
+                _networkService.OnLocalStrokeMoved(pointToAdd);
+            }
         }
-
-
 
         public void EndStroke()
         {
@@ -440,6 +458,14 @@ namespace Features.Drawing.App
                 
                 // Spatial Indexing
                 _collisionService.Insert(_currentStroke);
+
+                // Network Sync: End Stroke
+                if (_networkService != null)
+                {
+                    // Calculate a checksum if needed, for now just pass 0
+                    // Count is useful
+                    _networkService.OnLocalStrokeEnded(0, _currentStroke.Points.Count);
+                }
             }
             
             // Serialization Check (Debug)
@@ -562,6 +588,94 @@ namespace Features.Drawing.App
         }
 
         // --- Network Sync Helpers (Proposed) ---
+
+        public void CommitRemoteStroke(StrokeEntity stroke)
+        {
+            if (stroke == null || stroke.Points.Count == 0) return;
+
+            // 1. Setup Renderer State for this stroke
+            bool isEraser = stroke.BrushId == DrawingConstants.ERASER_BRUSH_ID;
+            
+            // Note: We are modifying the renderer state directly here.
+            // This is safe because this runs on the main thread, but we must ensure
+            // we restore it or that the next StartStroke resets it correctly (which it does).
+            
+            BrushStrategy strategy = null;
+            if (isEraser)
+            {
+                strategy = _eraserStrategy;
+                if (_renderer != null)
+                {
+                    if (strategy != null) _renderer.ConfigureBrush(strategy);
+                    _renderer.SetEraser(true);
+                    _renderer.SetBrushSize(stroke.Size);
+                }
+            }
+            else
+            {
+                // TODO: Lookup strategy by ID if we sync it. 
+                // For now use current strategy as fallback or default
+                strategy = _currentStrategy;
+                
+                if (_renderer != null)
+                {
+                    if (strategy != null) _renderer.ConfigureBrush(strategy, _currentRuntimeTexture);
+                    _renderer.SetEraser(false);
+                    // Convert uint color back to Color
+                    Color c = UIntToColor(stroke.ColorRGBA);
+                    _renderer.SetBrushColor(c);
+                    _renderer.SetBrushSize(stroke.Size);
+                }
+            }
+
+            // 2. Draw Full Stroke (Smoothly)
+            // We use the same smoothing logic as local strokes
+            if (_renderer != null)
+            {
+                // Create temp command to execute drawing logic?
+                // Or just draw directly.
+                // Let's draw directly using the smoothing service helper
+                
+                // We can reuse DrawStrokeCommand logic but we don't want to create a command instance just to execute it?
+                // Actually creating a command is exactly what we want, because we want to add it to history!
+            }
+
+            // 3. Create Command & Add to History
+            var cmd = new DrawStrokeCommand(
+                stroke.Id.ToString(),
+                stroke.SequenceId,
+                new List<LogicPoint>(stroke.Points),
+                strategy,
+                _currentRuntimeTexture, // Might be wrong if remote user used different texture
+                UIntToColor(stroke.ColorRGBA),
+                stroke.Size,
+                isEraser
+            );
+            
+            // Execute (Draws it)
+            cmd.Execute(_renderer, _smoothingService);
+            
+            // Add to history
+            _historyManager.AddCommand(cmd);
+            
+            // Spatial Index
+            _collisionService.Insert(stroke);
+            
+            // Diagnostics
+            if (_logger != null)
+            {
+                 _logger.Info("RemoteStrokeCommitted", Common.Diagnostics.TraceContext.New(), new Dictionary<string, object> { { "id", stroke.Id }, { "points", stroke.Points.Count } });
+            }
+        }
+        
+        private Color UIntToColor(uint color)
+        {
+            byte r = (byte)((color >> 24) & 0xFF);
+            byte g = (byte)((color >> 16) & 0xFF);
+            byte b = (byte)((color >> 8) & 0xFF);
+            byte a = (byte)(color & 0xFF);
+            return new Color32(r, g, b, a);
+        }
 
         public void ReceiveRemoteStroke(StrokeEntity stroke)
         {

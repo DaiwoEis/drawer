@@ -149,9 +149,13 @@ Assets/Scripts/Features/Drawing/
     *   引入基于分块 (Chunk) 的动态加载与坐标映射系统。
 
 2.  **多人实时协同 (Real-time Collaboration)**
-    *   构建基于 WebSocket/Relay 的同步服务。
-    *   利用现有的二进制增量协议实现低延迟笔迹同步。
-    *   处理多用户并发冲突。
+    *   **混合同步架构 (Hybrid Sync Architecture)**:
+        *   **Ghost Layer**: 使用 UDP 流传输实时增量数据 (`UpdateStroke`)，在 `GhostOverlayRenderer` 上绘制“幽灵笔触”。
+        *   **Commit Layer**: 笔画结束时 (`EndStroke`)，发送完整数据包并触发 `DrawingAppService.CommitRemoteStroke`，确保最终一致性。
+    *   **协议优化**:
+        *   **Delta Encoding**: 坐标使用相对前一点的增量存储。
+        *   **VarInt**: 小位移（绝大多数情况）仅占用 1 字节。
+        *   **带宽**: 相比原始 Vector2，数据量减少约 80%。
 
 3.  **笔迹回放与导出 (Playback & Export)**
     *   基于序列化数据的绘画过程回放。

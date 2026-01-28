@@ -24,6 +24,8 @@ Understanding these terms is mandatory for any code modification.
 | **Command Pattern** | All state changes (Draw, Erase, Clear) are encapsulated as `ICommand` objects to support Undo/Redo and Serialization. | `App/Command` |
 | **Spatial Index** | A grid-based spatial hashing system used to accelerate Eraser collision detection. | `Service/StrokeSpatialIndex` |
 | **LogicToWorld** | The ratio converting `LogicPoint` (0-65535) to World Space (Pixels). Dynamic based on Canvas resolution. | `DrawingConstants`, `AppService` |
+| **Ghost Layer** | A transient overlay layer for rendering remote strokes in real-time before they are committed to history. | `Presentation/GhostOverlayRenderer` |
+| **Delta Compression** | A technique to compress stroke points by storing differences relative to the previous point. | `Service/Network/StrokeDeltaCompressor` |
 | **Structured Log** | JSON-formatted logs containing `TraceId` and `Context`, enabling observability. | `Common/Diagnostics` |
 
 ## 3. System Architecture
@@ -35,6 +37,7 @@ The system follows a strict unidirectional data flow and layered separation.
 ```mermaid
 graph TD
     Input[Input System] --> AppService
+    Net[Network Service] <--> AppService
     
     subgraph "Application Layer"
         AppService[DrawingAppService]
@@ -45,21 +48,26 @@ graph TD
         History[HistoryManager]
         Collision[CollisionService]
         Smooth[SmoothingService]
+        Network[DrawingNetworkService]
     end
     
     subgraph "Domain Layer"
         Entity[Stroke / LogicPoint]
+        NetPacket[Network Packets]
         Rules[Business Rules]
     end
     
     subgraph "Presentation Layer"
         Renderer[CanvasRenderer]
+        Ghost[GhostOverlayRenderer]
         View[UI Views]
     end
 
     AppService --> History
     AppService --> Collision
     AppService --> Renderer
+    AppService --> Network
+    Network --> Ghost
     History --> Cmd
     Cmd --> Renderer
     Renderer -.-> Entity
@@ -69,13 +77,15 @@ graph TD
 
 1.  **Presentation (Unity)**:
     *   **CanvasRenderer**: Handles `CommandBuffer`, `Mesh`, `Material`. **Purely visual**.
+    *   **GhostOverlayRenderer**: Handles transient rendering of remote strokes (Red trail for eraser).
     *   **Rules**: Never put business logic here. Must implement `IStrokeRenderer`.
 2.  **Application (App)**:
-    *   **DrawingAppService**: The "Brain". Coordinates Input -> Logic -> Rendering.
+    *   **DrawingAppService**: The "Brain". Coordinates Input -> Logic -> Rendering -> Network.
     *   **Rules**: Manages `TraceContext`. Handles Dependency Injection.
 3.  **Service (Logic)**:
     *   **HistoryManager**: Manages Undo/Redo stacks.
     *   **StrokeCollisionService**: Handles Eraser logic.
+    *   **DrawingNetworkService**: Handles packet buffering, compression, and ghost state management.
     *   **Rules**: Stateless where possible. computational heavy lifting.
 4.  **Domain (Core)**:
     *   **Entities**: POCOs (Plain Old C# Objects).
@@ -89,6 +99,7 @@ graph TD
     *   **Dynamic Resolution**: Listens to `OnResolutionChanged` to update `LogicToWorldRatio`.
     *   **Diagnostics**: Injects `TraceContext` into every stroke lifecycle.
     *   **State Sync**: **MUST** resync Renderer state (Color, Size, Mode) before processing input to prevent Undo/Redo side effects.
+    *   **Network Hooks**: Calls `DrawingNetworkService` on Start/Move/End stroke events.
 
 ### 4.2 CanvasRenderer (The Painter)
 *   **Responsibility**: GPU-accelerated rendering.
@@ -101,6 +112,14 @@ graph TD
 *   **Optimization**:
     *   **Deduplication**: Filters eraser points too close to the previous one (10% brush size).
     *   **Effective Check**: Discards eraser strokes that hit no ink (saves History space).
+
+### 4.4 DrawingNetworkService (The Messenger)
+*   **Responsibility**: Real-time synchronization.
+*   **Protocol**: Hybrid Sync (Ghost Layer + Commit).
+*   **Key Logic**:
+    *   **Delta Compression**: Uses `StrokeDeltaCompressor` (VarInt + Relative) to minimize bandwidth.
+    *   **Ghost Rendering**: Renders incoming points immediately to `GhostOverlayRenderer`.
+    *   **Commit**: On `EndStroke`, reconstructs the full `StrokeEntity` and commits it to `DrawingAppService`.
 
 ## 5. Development Guidelines for AI Agents
 
