@@ -48,7 +48,6 @@ namespace Features.Drawing.Editor.Tools
             
             // Wire DrawingNetworkService
             var soNetService = new SerializedObject(netService);
-            soNetService.FindProperty("_appService").objectReferenceValue = appService;
             soNetService.FindProperty("_ghostRenderer").objectReferenceValue = ghostRenderer;
             soNetService.ApplyModifiedProperties();
 
