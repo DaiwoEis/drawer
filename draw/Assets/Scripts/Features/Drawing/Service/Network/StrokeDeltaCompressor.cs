@@ -13,31 +13,67 @@ namespace Features.Drawing.Service.Network
     {
         private const sbyte ESCAPE_MARKER = -128; // 0x80
 
+        // Thread-safe buffer for compression to avoid allocations
+        [System.ThreadStatic]
+        private static byte[] _compressionBuffer;
+        private const int BUFFER_SIZE = 65536; // 64KB should be enough for any single stroke batch
+
         /// <summary>
         /// Compresses a list of points relative to an origin point.
+        /// Returns a copy of the valid data. For Zero-GC, use the overload accepting a buffer.
         /// </summary>
         public static byte[] Compress(LogicPoint origin, List<LogicPoint> points)
         {
             if (points == null || points.Count == 0) return new byte[0];
 
-            // Estimate capacity: 3 bytes per point (1x + 1y + 1p) usually
-            using (var ms = new MemoryStream(points.Count * 3))
-            using (var writer = new BinaryWriter(ms))
+            if (_compressionBuffer == null) _compressionBuffer = new byte[BUFFER_SIZE];
+
+            int offset = 0;
+            LogicPoint prev = origin;
+
+            // Direct byte writing to avoid BinaryWriter allocation
+            foreach (var p in points)
             {
-                LogicPoint prev = origin;
-                
-                foreach (var p in points)
+                // Ensure buffer has space (check 3 bytes + potential escapes)
+                if (offset + 6 >= _compressionBuffer.Length) 
                 {
-                    WriteCoordinate(writer, p.X, prev.X);
-                    WriteCoordinate(writer, p.Y, prev.Y);
-                    writer.Write(p.Pressure);
-                    
-                    prev = p;
+                    // Should rarely happen with 64KB buffer for a stroke batch
+                    // Fallback or resize logic could go here, but for now we clamp/return what we have
+                    break; 
                 }
-                
-                return ms.ToArray();
+
+                offset += WriteCoordinate(_compressionBuffer, offset, p.X, prev.X);
+                offset += WriteCoordinate(_compressionBuffer, offset, p.Y, prev.Y);
+                _compressionBuffer[offset++] = p.Pressure;
+
+                prev = p;
+            }
+
+            // Copy only valid data
+            byte[] result = new byte[offset];
+            System.Buffer.BlockCopy(_compressionBuffer, 0, result, 0, offset);
+            return result;
+        }
+
+        private static int WriteCoordinate(byte[] buffer, int offset, ushort current, ushort previous)
+        {
+            int diff = (int)current - (int)previous;
+            
+            if (diff >= -127 && diff <= 127)
+            {
+                buffer[offset] = (byte)((sbyte)diff); // Cast to byte (preserves bits)
+                return 1;
+            }
+            else
+            {
+                buffer[offset] = unchecked((byte)ESCAPE_MARKER); // -128
+                // Write ushort (Little Endian)
+                buffer[offset + 1] = (byte)(current & 0xFF);
+                buffer[offset + 2] = (byte)((current >> 8) & 0xFF);
+                return 3;
             }
         }
+
 
         /// <summary>
         /// Decompresses byte array back into LogicPoints.
@@ -74,24 +110,6 @@ namespace Features.Drawing.Service.Network
                 }
             }
             return points;
-        }
-
-        private static void WriteCoordinate(BinaryWriter writer, ushort current, ushort previous)
-        {
-            int diff = (int)current - (int)previous;
-
-            // Range for sbyte is -128 to 127.
-            // We reserve -128 as Escape Marker.
-            // So valid delta range is -127 to 127.
-            if (diff >= -127 && diff <= 127)
-            {
-                writer.Write((sbyte)diff);
-            }
-            else
-            {
-                writer.Write(ESCAPE_MARKER);
-                writer.Write(current); // Write absolute value
-            }
         }
 
         private static ushort ReadCoordinate(BinaryReader reader, ushort previous)

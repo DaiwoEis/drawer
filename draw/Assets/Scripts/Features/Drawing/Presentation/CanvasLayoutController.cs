@@ -69,8 +69,20 @@ namespace Features.Drawing.Presentation
 
         public void Release()
         {
-            if (_activeRT != null) { _activeRT.Release(); Object.Destroy(_activeRT); _activeRT = null; }
-            if (_bakedRT != null) { _bakedRT.Release(); Object.Destroy(_bakedRT); _bakedRT = null; }
+            if (_activeRT != null) 
+            {
+                if (RenderTexture.active == _activeRT) RenderTexture.active = null;
+                _activeRT.Release(); 
+                Object.Destroy(_activeRT); 
+                _activeRT = null; 
+            }
+            if (_bakedRT != null) 
+            {
+                if (RenderTexture.active == _bakedRT) RenderTexture.active = null;
+                _bakedRT.Release(); 
+                Object.Destroy(_bakedRT); 
+                _bakedRT = null; 
+            }
         }
 
         public void CheckLayoutChanges()

@@ -208,7 +208,7 @@ namespace Editor
                     
                     SerializedObject soInput = new SerializedObject(input);
                     soInput.FindProperty("_inputArea").objectReferenceValue = rect;
-                    soInput.FindProperty("_appService").objectReferenceValue = appService;
+                    soInput.FindProperty("_inputHandlerComponent").objectReferenceValue = appService;
                     soInput.ApplyModifiedProperties();
 
                     // 3. Re-link AppService to Renderer

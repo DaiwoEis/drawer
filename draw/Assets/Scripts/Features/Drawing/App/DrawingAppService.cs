@@ -11,6 +11,7 @@ using Features.Drawing.Domain.Entity;
 using Common.Constants;
 using Features.Drawing.App.Command;
 using Features.Drawing.App.Interface;
+using Features.Drawing.App.State;
 using Common.Diagnostics;
 
 namespace Features.Drawing.App
@@ -24,6 +25,7 @@ namespace Features.Drawing.App
         [Header("References")]
         [SerializeField] private Features.Drawing.Presentation.CanvasRenderer _concreteRenderer; 
         [SerializeField] private BrushStrategy _eraserStrategy; // Hard brush for eraser
+        [SerializeField] private BrushStrategy[] _registeredBrushes; // Registry of available brushes
         
         [Header("Diagnostics")]
         [SerializeField] private bool _enableDiagnostics = true;
@@ -32,23 +34,18 @@ namespace Features.Drawing.App
         private PerformanceMonitor _perfMonitor;
         private TraceContext _activeStrokeTrace;
 
-        // State
-        private Color _currentColor = Color.black;
-        private float _currentSize = 10f;
-        private float _lastBrushSize = 10f;
-        private float _lastEraserSize = 30f;
-        private bool _isEraser = false;
-        private BrushStrategy _currentStrategy;
-        private Vector2 _currentStabilizedPos;
-        private long _nextSequenceId = 1;
+        // State Management
+        private InputStateManager _inputState;
         
         // Public Accessors for UI/Preview
-        public bool IsEraser => _isEraser;
-        public float CurrentSize => _currentSize;
+        public bool IsEraser => _inputState?.IsEraser ?? false;
+        public float CurrentSize => _inputState?.CurrentSize ?? 10f;
         public BrushStrategy EraserStrategy => _eraserStrategy;
 
         // Optimization State
         private LogicPoint _lastAddedPoint;
+        private Vector2 _currentStabilizedPos;
+        private long _nextSequenceId = 1;
 
         
         // Services
@@ -64,7 +61,6 @@ namespace Features.Drawing.App
         private readonly LogicPoint[] _singlePointArray = new LogicPoint[1];
 
         // Current stroke state capturing
-        private Texture2D _currentRuntimeTexture;
         private StrokeEntity _currentStroke;
 
         private StrokeCollisionService _collisionService;
@@ -82,6 +78,12 @@ namespace Features.Drawing.App
             // 1. Resolve Renderer (Priority: Inspector -> FindObjectOfType)
             if (_concreteRenderer == null) 
                 _concreteRenderer = FindObjectOfType<Features.Drawing.Presentation.CanvasRenderer>();
+
+            // Ensure Renderer is initialized explicitly (No Coroutines)
+            if (_concreteRenderer != null)
+            {
+                _concreteRenderer.Initialize();
+            }
                 
             IStrokeRenderer renderer = _concreteRenderer as IStrokeRenderer;
             
@@ -138,6 +140,9 @@ namespace Features.Drawing.App
             if (_historyManager == null) 
                 _historyManager = historyManager ?? new DrawingHistoryManager(_renderer, _smoothingService, _collisionService);
 
+            // Init State Manager
+            _inputState = new InputStateManager(_renderer, _eraserStrategy);
+
             // 3. Setup Resolution Handling
             if (_renderer is Features.Drawing.Presentation.CanvasRenderer concreteRenderer)
             {
@@ -190,94 +195,27 @@ namespace Features.Drawing.App
 
         public void SetBrushStrategy(BrushStrategy strategy, Texture2D runtimeTexture = null)
         {
-            if (strategy == null) return;
-            
-            _currentStrategy = strategy;
-            _currentRuntimeTexture = runtimeTexture; // Capture runtime texture
-            _isEraser = false;
-            _currentSize = _lastBrushSize; // Restore brush size
-            
-            if (_renderer != null)
-            {
-                _renderer.ConfigureBrush(strategy, runtimeTexture);
-                _renderer.SetEraser(false);
-                _renderer.SetBrushColor(_currentColor);
-                _renderer.SetBrushSize(_lastBrushSize);
-            }
+            _inputState?.SetBrushStrategy(strategy, runtimeTexture);
         }
 
         public void SetColor(Color color)
         {
-            _currentColor = color;
-            _isEraser = false;
-            // Restore brush size because setting color implies using brush
-            _currentSize = _lastBrushSize; 
-            
-            if (_renderer != null)
-            {
-                _renderer.SetBrushColor(color);
-                _renderer.SetEraser(false);
-                _renderer.SetBrushSize(_lastBrushSize);
-            }
+            _inputState?.SetColor(color);
         }
 
         public void SetSize(float size)
         {
-            _currentSize = size;
-            
-            // USER REQUEST: "Size is for changing brush size, not eraser."
-            // So we ALWAYS update _lastBrushSize, regardless of current mode.
-            _lastBrushSize = size;
-
-            if (_isEraser)
-            {
-                // If we are in Eraser mode, we ALSO update Eraser size
-                _lastEraserSize = size;
-            }
-
-            if (_renderer != null)
-            {
-                _renderer.SetBrushSize(size);
-            }
+            _inputState?.SetSize(size);
         }
 
         public void SetStabilization(float factor)
         {
-            if (_currentStrategy != null)
-            {
-                _currentStrategy.StabilizationFactor = Mathf.Clamp(factor, 0f, 0.95f);
-            }
+            _inputState?.SetStabilization(factor);
         }
 
         public void SetEraser(bool isEraser)
         {
-            _isEraser = isEraser;
-            
-            // Swap size based on mode
-            float targetSize = isEraser ? _lastEraserSize : _lastBrushSize;
-            _currentSize = targetSize;
-
-            if (_renderer != null)
-            {
-                if (isEraser)
-                {
-                    // Force Eraser to use Hard Brush Strategy if available
-                    if (_eraserStrategy != null)
-                    {
-                        _renderer.ConfigureBrush(_eraserStrategy);
-                    }
-                }
-
-                _renderer.SetEraser(isEraser);
-                _renderer.SetBrushSize(targetSize);
-                
-                // CRITICAL FIX: If switching BACK to brush, we MUST restore the brush's blend modes and texture.
-                if (!isEraser && _currentStrategy != null)
-                {
-                    _renderer.ConfigureBrush(_currentStrategy, _currentRuntimeTexture); // Restore runtime texture if available
-                    _renderer.SetBrushColor(_currentColor);
-                }
-            }
+            _inputState?.SetEraser(isEraser);
         }
 
         public void ClearCanvas()
@@ -296,15 +234,17 @@ namespace Features.Drawing.App
 
         public void StartStroke(LogicPoint point)
         {
+            if (_inputState == null) return;
+
             // Diagnostics
             _activeStrokeTrace = TraceContext.New();
             if (_logger != null)
             {
                 var meta = new Dictionary<string, object> 
                 { 
-                    { "isEraser", _isEraser },
-                    { "size", _currentSize },
-                    { "color", _currentColor }
+                    { "isEraser", _inputState.IsEraser },
+                    { "size", _inputState.CurrentSize },
+                    { "color", _inputState.CurrentColor }
                 };
                 _logger.Info("StrokeStarted", _activeStrokeTrace, meta);
             }
@@ -313,41 +253,24 @@ namespace Features.Drawing.App
             OnStrokeStarted?.Invoke();
             
             // CRITICAL FIX: Force sync Renderer state with Service state.
-            // Undo/Redo operations (RedrawHistory) may have left the renderer in a different state 
-            // (e.g. Eraser mode, wrong brush, wrong size).
-            if (_renderer != null)
-            {
-                if (_isEraser)
-                {
-                    if (_eraserStrategy != null) _renderer.ConfigureBrush(_eraserStrategy);
-                    _renderer.SetEraser(true);
-                    _renderer.SetBrushSize(_currentSize); // _currentSize is already set to eraser size
-                }
-                else
-                {
-                    if (_currentStrategy != null) _renderer.ConfigureBrush(_currentStrategy, _currentRuntimeTexture);
-                    _renderer.SetEraser(false);
-                    _renderer.SetBrushColor(_currentColor);
-                    _renderer.SetBrushSize(_currentSize);
-                }
-            }
+            _inputState.SyncToRenderer();
 
             _currentStrokeRaw.Clear();
 
             // Create Domain Entity
             uint id = (uint)Random.Range(0, int.MaxValue); // Simple random ID
             uint seed = (uint)Random.Range(0, int.MaxValue);
-            uint colorInt = ColorToUInt(_currentColor);
+            uint colorInt = ColorToUInt(_inputState.CurrentColor);
             
-            // Use reserved ID for eraser to allow network clients to identify it
-            ushort brushId = _isEraser ? DrawingConstants.ERASER_BRUSH_ID : (ushort)0;
+            // Resolve Brush ID
+            ushort brushId = GetBrushId(_inputState.CurrentStrategy);
             
-            _currentStroke = new StrokeEntity(id, 0, brushId, seed, colorInt, _currentSize, _nextSequenceId++);
+            _currentStroke = new StrokeEntity(id, 0, brushId, seed, colorInt, _inputState.CurrentSize, _nextSequenceId++);
 
             // Network Sync: Begin Stroke
             if (_networkService != null)
             {
-                _networkService.OnLocalStrokeStarted(id, _currentStrategy, _currentColor, _currentSize, _isEraser);
+                _networkService.OnLocalStrokeStarted(id, _inputState.CurrentStrategy, _inputState.CurrentColor, _inputState.CurrentSize, _inputState.IsEraser);
             }
 
             _lastAddedPoint = point;
@@ -360,7 +283,7 @@ namespace Features.Drawing.App
             // Optimization: Eraser Deduplication (User Requirement)
             // "Eraser repeated drawing positions can be not recorded"
             // Filter out points that are too close to the last added point to avoid redundant collision checks and history data.
-            if (_isEraser)
+            if (_inputState.IsEraser)
             {
                 // LogicPoint uses 0-65535. 
                 // Convert size (pixels) to approximate logical units.
@@ -368,7 +291,7 @@ namespace Features.Drawing.App
                 // Threshold: 10% of brush size.
                 // If brush is 20px, threshold is 2px ~ 70 units.
                 float scale = _logicToWorldRatio;
-                float threshold = (_currentSize * 0.1f) * scale;
+                float threshold = (_inputState.CurrentSize * 0.1f) * scale;
                 
                 // Use squared distance for perf
                 float sqrDist = LogicPoint.SqrDistance(_lastAddedPoint, point);
@@ -381,7 +304,7 @@ namespace Features.Drawing.App
             LogicPoint pointToAdd = point;
             
             // Apply Stabilization (Anti-Shake)
-            if (!_isEraser && _currentStrategy != null && _currentStrategy.StabilizationFactor > 0.001f)
+            if (!_inputState.IsEraser && _inputState.CurrentStrategy != null && _inputState.CurrentStrategy.StabilizationFactor > 0.001f)
             {
                 Vector2 target = point.ToNormalized();
                 float dist = Vector2.Distance(target, _currentStabilizedPos);
@@ -390,7 +313,7 @@ namespace Features.Drawing.App
                 const float MAX_SPEED_THRESHOLD = 0.05f;
 
                 float speedT = Mathf.InverseLerp(MIN_SPEED_THRESHOLD, MAX_SPEED_THRESHOLD, dist);
-                float dynamicFactor = Mathf.Lerp(_currentStrategy.StabilizationFactor, _currentStrategy.StabilizationFactor * 0.2f, speedT);
+                float dynamicFactor = Mathf.Lerp(_inputState.CurrentStrategy.StabilizationFactor, _inputState.CurrentStrategy.StabilizationFactor * 0.2f, speedT);
                 
                 float t = Mathf.Clamp01(1.0f - dynamicFactor);
                 _currentStabilizedPos = Vector2.Lerp(_currentStabilizedPos, target, t);
@@ -423,7 +346,7 @@ namespace Features.Drawing.App
             if (_currentStroke.Points.Count > 0)
             {
                 // OPTIMIZATION: Discard eraser strokes that don't intersect with any existing ink.
-                if (_isEraser)
+                if (_inputState.IsEraser)
                 {
                     bool isEffective = _collisionService.IsEraserStrokeEffective(_currentStroke, _historyManager.ActiveStrokeIds);
                     
@@ -441,17 +364,17 @@ namespace Features.Drawing.App
                 // We pass the current state configuration.
                 
                 // Fix: Eraser should use _eraserStrategy if available
-                var strategyToUse = _isEraser ? _eraserStrategy : _currentStrategy;
+                var strategyToUse = _inputState.IsEraser ? _eraserStrategy : _inputState.CurrentStrategy;
 
                 var cmd = new DrawStrokeCommand(
                     _currentStroke.Id.ToString(),
                     _currentStroke.SequenceId,
                     new List<LogicPoint>(_currentStroke.Points),
                     strategyToUse,
-                    _currentRuntimeTexture,
-                    _currentColor,
-                    _currentSize,
-                    _isEraser
+                    _inputState.CurrentRuntimeTexture,
+                    _inputState.CurrentColor,
+                    _inputState.CurrentSize,
+                    _inputState.IsEraser
                 );
                 
                 _historyManager.AddCommand(cmd);
@@ -480,11 +403,11 @@ namespace Features.Drawing.App
             if (!_historyManager.CanUndo) return;
 
             // Save state
-            var savedColor = _currentColor;
-            var savedSize = _currentSize;
-            var savedEraser = _isEraser;
-            var savedStrategy = _currentStrategy;
-            var savedRuntimeTex = _currentRuntimeTexture;
+            var savedColor = _inputState.CurrentColor;
+            var savedSize = _inputState.CurrentSize;
+            var savedEraser = _inputState.IsEraser;
+            var savedStrategy = _inputState.CurrentStrategy;
+            var savedRuntimeTex = _inputState.CurrentRuntimeTexture;
 
             _historyManager.Undo();
             
@@ -497,11 +420,11 @@ namespace Features.Drawing.App
             if (!_historyManager.CanRedo) return;
 
             // Save state
-            var savedColor = _currentColor;
-            var savedSize = _currentSize;
-            var savedEraser = _isEraser;
-            var savedStrategy = _currentStrategy;
-            var savedRuntimeTex = _currentRuntimeTexture;
+            var savedColor = _inputState.CurrentColor;
+            var savedSize = _inputState.CurrentSize;
+            var savedEraser = _inputState.IsEraser;
+            var savedStrategy = _inputState.CurrentStrategy;
+            var savedRuntimeTex = _inputState.CurrentRuntimeTexture;
 
             _historyManager.Redo();
             
@@ -519,11 +442,11 @@ namespace Features.Drawing.App
         public void RebuildBackBuffer()
         {
             // Save state
-            var savedColor = _currentColor;
-            var savedSize = _currentSize;
-            var savedEraser = _isEraser;
-            var savedStrategy = _currentStrategy;
-            var savedRuntimeTex = _currentRuntimeTexture;
+            var savedColor = _inputState.CurrentColor;
+            var savedSize = _inputState.CurrentSize;
+            var savedEraser = _inputState.IsEraser;
+            var savedStrategy = _inputState.CurrentStrategy;
+            var savedRuntimeTex = _inputState.CurrentRuntimeTexture;
 
             _historyManager.RebuildBackBuffer();
             
@@ -613,13 +536,17 @@ namespace Features.Drawing.App
             }
             else
             {
-                // TODO: Lookup strategy by ID if we sync it. 
-                // For now use current strategy as fallback or default
-                strategy = _currentStrategy;
+                // Lookup strategy by ID
+                strategy = GetBrushStrategy(stroke.BrushId);
                 
                 if (_renderer != null)
                 {
-                    if (strategy != null) _renderer.ConfigureBrush(strategy, _currentRuntimeTexture);
+                    // Use runtime texture if it's the current local user (not ideal logic for remote, but best guess)
+                    // For true remote, we should sync the texture ID or use the strategy's default.
+                    // Assuming strategy default for remote strokes.
+                    Texture2D tex = strategy?.MainTexture;
+                    if (strategy != null) _renderer.ConfigureBrush(strategy, tex);
+                    
                     _renderer.SetEraser(false);
                     // Convert uint color back to Color
                     Color c = UIntToColor(stroke.ColorRGBA);
@@ -646,7 +573,7 @@ namespace Features.Drawing.App
                 stroke.SequenceId,
                 new List<LogicPoint>(stroke.Points),
                 strategy,
-                _currentRuntimeTexture, // Might be wrong if remote user used different texture
+                _inputState.CurrentRuntimeTexture, // Might be wrong if remote user used different texture
                 UIntToColor(stroke.ColorRGBA),
                 stroke.Size,
                 isEraser
@@ -691,8 +618,8 @@ namespace Features.Drawing.App
             else
             {
                 _renderer.SetEraser(false);
-                // Note: Strategy lookup by ID is not implemented here, using current for demo
-                if (_currentStrategy != null) _renderer.ConfigureBrush(_currentStrategy, _currentRuntimeTexture);
+                var strategy = GetBrushStrategy(stroke.BrushId);
+                if (strategy != null) _renderer.ConfigureBrush(strategy, strategy.MainTexture);
             }
             
             _renderer.SetBrushSize(stroke.Size);
@@ -705,6 +632,32 @@ namespace Features.Drawing.App
             _renderer.DrawPoints(stroke.Points);
             
             _renderer.EndStroke();
+        }
+        private BrushStrategy GetBrushStrategy(ushort id)
+        {
+            if (id == DrawingConstants.ERASER_BRUSH_ID) return _eraserStrategy;
+            if (_registeredBrushes != null && id < _registeredBrushes.Length)
+            {
+                return _registeredBrushes[id];
+            }
+            // Fallback
+            if (_registeredBrushes != null && _registeredBrushes.Length > 0) return _registeredBrushes[0];
+            return _inputState.CurrentStrategy; // Last resort
+        }
+
+        private ushort GetBrushId(BrushStrategy strategy)
+        {
+            if (_inputState.IsEraser) return DrawingConstants.ERASER_BRUSH_ID;
+            // Or check equality with eraser strategy
+            
+            if (_registeredBrushes != null)
+            {
+                for (int i = 0; i < _registeredBrushes.Length; i++)
+                {
+                    if (_registeredBrushes[i] == strategy) return (ushort)i;
+                }
+            }
+            return 0;
         }
     }
 }

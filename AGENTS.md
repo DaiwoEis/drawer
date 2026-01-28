@@ -96,14 +96,16 @@ graph TD
 ### 4.1 DrawingAppService (The Facade)
 *   **Responsibility**: Entry point for all drawing actions.
 *   **Critical Logic**:
+    *   **Input State**: Delegates brush/color/size state to `InputStateManager`.
     *   **Dynamic Resolution**: Listens to `OnResolutionChanged` to update `LogicToWorldRatio`.
     *   **Diagnostics**: Injects `TraceContext` into every stroke lifecycle.
-    *   **State Sync**: **MUST** resync Renderer state (Color, Size, Mode) before processing input to prevent Undo/Redo side effects.
+    *   **State Sync**: **MUST** resync Renderer state via `InputStateManager.SyncToRenderer()` before processing input.
     *   **Network Hooks**: Calls `DrawingNetworkService` on Start/Move/End stroke events.
 
 ### 4.2 CanvasRenderer (The Painter)
 *   **Responsibility**: GPU-accelerated rendering.
 *   **Optimization**:
+    *   **Initialization**: Uses explicit `Initialize()` method (Synchronous). No Coroutines.
     *   **Shader Warming**: Uses `ShaderVariantCollection` in `InitializeGraphics` to prevent first-stroke stutter.
     *   **Resource Cleanup**: Explicitly destroys Materials/Meshes in `OnDestroy`.
 

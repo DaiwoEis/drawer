@@ -74,6 +74,8 @@ namespace Features.Drawing.Presentation
             set => _forceCpuMode = value; 
         }
 
+        private bool _isInitialized = false;
+
         private void Awake()
         {
             // Fix background color (User requirement: White, not Blue)
@@ -83,21 +85,26 @@ namespace Features.Drawing.Presentation
                 Camera.main.clearFlags = CameraClearFlags.SolidColor;
             }
 
-            // Start initialization coroutine
-            StartCoroutine(InitializeRoutine());
+            // Note: Removed coroutine initialization. 
+            // Now relies on explicit Initialize() call from AppService or Bootstrapper.
         }
 
-        private System.Collections.IEnumerator InitializeRoutine()
+        public void Initialize()
         {
-            InitializeGpuGenerator();
-            yield return null;
+            if (_isInitialized) return;
 
+            InitializeGpuGenerator();
+            
             _layoutController = new CanvasLayoutController(_displayImage, _resolution, 0);
             _layoutController.OnLayoutChanged += OnLayoutChanged;
-            yield return null;
-
+            
             InitializeGraphics();
+
+            _isInitialized = true;
         }
+
+        // Removed InitializeRoutine
+
 
         private void OnLayoutChanged()
         {
