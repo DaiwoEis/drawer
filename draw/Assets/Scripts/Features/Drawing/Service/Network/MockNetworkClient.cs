@@ -19,7 +19,12 @@ namespace Features.Drawing.Service.Network
 
         public void SendUpdateStroke(UpdateStrokePacket packet)
         {
-            if (_loopback && isActiveAndEnabled) StartCoroutine(SimulateReceive(packet));
+            if (_loopback && isActiveAndEnabled)
+            {
+                // Copy payloads because caller may recycle pooled buffers after this call.
+                var safePacket = CloneUpdatePacket(packet);
+                StartCoroutine(SimulateReceive(safePacket));
+            }
         }
 
         public void SendEndStroke(EndStrokePacket packet)
@@ -51,6 +56,45 @@ namespace Features.Drawing.Service.Network
             if (packet is EndStrokePacket end) { end.StrokeId += 10000; packet = end; }
             
             OnPacketReceived?.Invoke(packet);
+        }
+
+        private UpdateStrokePacket CloneUpdatePacket(UpdateStrokePacket packet)
+        {
+            var cloned = packet;
+
+            if (packet.Payload != null && packet.PayloadLength > 0)
+            {
+                int len = Mathf.Min(packet.PayloadLength, packet.Payload.Length);
+                var copy = new byte[len];
+                System.Buffer.BlockCopy(packet.Payload, 0, copy, 0, len);
+                cloned.Payload = copy;
+                cloned.PayloadLength = len;
+                cloned.PayloadIsPooled = false;
+            }
+            else
+            {
+                cloned.Payload = null;
+                cloned.PayloadLength = 0;
+                cloned.PayloadIsPooled = false;
+            }
+
+            if (packet.RedundantPayload != null && packet.RedundantPayloadLength > 0)
+            {
+                int len = Mathf.Min(packet.RedundantPayloadLength, packet.RedundantPayload.Length);
+                var copy = new byte[len];
+                System.Buffer.BlockCopy(packet.RedundantPayload, 0, copy, 0, len);
+                cloned.RedundantPayload = copy;
+                cloned.RedundantPayloadLength = len;
+                cloned.RedundantPayloadIsPooled = false;
+            }
+            else
+            {
+                cloned.RedundantPayload = null;
+                cloned.RedundantPayloadLength = 0;
+                cloned.RedundantPayloadIsPooled = false;
+            }
+
+            return cloned;
         }
     }
 }

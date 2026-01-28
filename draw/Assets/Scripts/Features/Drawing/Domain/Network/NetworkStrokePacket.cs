@@ -27,7 +27,11 @@ namespace Features.Drawing.Domain.Network
         public ushort Sequence;
         public byte Count;
         public byte[] Payload; // Compressed Delta Points
+        public int PayloadLength;
         public byte[] RedundantPayload; // Previous batch points (for packet loss recovery)
+        public int RedundantPayloadLength;
+        public bool PayloadIsPooled;
+        public bool RedundantPayloadIsPooled;
     }
 
     [Serializable]

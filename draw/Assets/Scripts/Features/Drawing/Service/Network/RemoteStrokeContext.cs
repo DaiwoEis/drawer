@@ -20,10 +20,12 @@ namespace Features.Drawing.Service.Network
         // Data Buffer
         private List<LogicPoint> _points = new List<LogicPoint>(512);
         private int _lastReceivedSequenceId = -1; // -1 means no packets received yet
+        public int LastReceivedSequenceId => _lastReceivedSequenceId;
         
         // Rendering State
         private readonly GhostOverlayRenderer _ghostRenderer;
         private Features.Drawing.Domain.BrushStrategy _strategy;
+        private List<LogicPoint> _predictionBuffer = new List<LogicPoint>(512);
 
         public RemoteStrokeContext(uint strokeId, GhostOverlayRenderer ghostRenderer)
         {
@@ -53,6 +55,7 @@ namespace Features.Drawing.Service.Network
         public void ProcessUpdate(UpdateStrokePacket packet)
         {
             if (!IsActive) return;
+            if (packet.Payload == null || packet.PayloadLength <= 0) return;
 
             // Packet Loss Handling with Redundancy
             int expectedSeq = _lastReceivedSequenceId + 1;
@@ -61,10 +64,11 @@ namespace Features.Drawing.Service.Network
             // If we missed a packet, try to recover from RedundantPayload
             if (actualSeq > expectedSeq)
             {
-                if (actualSeq == expectedSeq + 1 && packet.RedundantPayload != null)
+                if (actualSeq == expectedSeq + 1 && packet.RedundantPayload != null && packet.RedundantPayloadLength > 0)
                 {
+                    if (packet.RedundantPayloadLength > packet.RedundantPayload.Length) return;
                     LogicPoint recoveryOrigin = _points.Count > 0 ? _points[_points.Count - 1] : new LogicPoint(0, 0, 0);
-                    StrokeDeltaCompressor.Decompress(recoveryOrigin, packet.RedundantPayload, _points);
+                    StrokeDeltaCompressor.Decompress(recoveryOrigin, packet.RedundantPayload, 0, packet.RedundantPayloadLength, _points);
                     _lastReceivedSequenceId = actualSeq - 1; 
                 }
             }
@@ -72,10 +76,10 @@ namespace Features.Drawing.Service.Network
             if (actualSeq <= _lastReceivedSequenceId) return;
 
             LogicPoint origin = _points.Count > 0 ? _points[_points.Count - 1] : new LogicPoint(0, 0, 0);
-            StrokeDeltaCompressor.Decompress(origin, packet.Payload, _points);
+            StrokeDeltaCompressor.Decompress(origin, packet.Payload, 0, packet.PayloadLength, _points);
             
             // Update velocity and state
-            UpdateVelocity(packet.Payload.Length); // Simplified velocity check
+            UpdateVelocity(packet.PayloadLength); // Simplified velocity check
             _lastReceivedSequenceId = actualSeq;
             _lastPacketTime = Time.time;
         }
@@ -100,6 +104,7 @@ namespace Features.Drawing.Service.Network
         public void Update(float deltaTime)
         {
             if (!IsActive) return;
+            if (_ghostRenderer == null) return;
 
             // Prepare points to draw
             List<LogicPoint> pointsToDraw = _points;
@@ -123,13 +128,11 @@ namespace Features.Drawing.Service.Network
                     
                     LogicPoint predictedPoint = new LogicPoint((ushort)predictedPos.x, (ushort)predictedPos.y, lastPoint.Pressure);
                     
-                    // Create a temporary list with predicted point
-                    // Optimization: Avoid new List every frame? 
-                    // But we can't modify _points.
-                    // Let's create a new list for now (MVP).
-                    pointsToDraw = new List<LogicPoint>(_points.Count + 1);
-                    pointsToDraw.AddRange(_points);
-                    pointsToDraw.Add(predictedPoint);
+                    // Reuse buffer to avoid per-frame allocations
+                    _predictionBuffer.Clear();
+                    _predictionBuffer.AddRange(_points);
+                    _predictionBuffer.Add(predictedPoint);
+                    pointsToDraw = _predictionBuffer;
                 }
             }
 

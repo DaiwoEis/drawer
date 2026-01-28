@@ -107,6 +107,14 @@ namespace Features.Drawing.App
             Initialize(renderer, null, null, null, logger);
         }
 
+        private void OnDestroy()
+        {
+            if (_networkService != null)
+            {
+                _networkService.OnRemoteStrokeCommitted -= CommitRemoteStroke;
+            }
+        }
+
         public void SetNetworkService(Features.Drawing.Service.Network.DrawingNetworkService networkService)
         {
             _networkService = networkService;
@@ -391,9 +399,8 @@ namespace Features.Drawing.App
                 // Network Sync: End Stroke
                 if (_networkService != null && _networkService.isActiveAndEnabled)
                 {
-                    // Calculate a checksum if needed, for now just pass 0
-                    // Count is useful
-                    _networkService.OnLocalStrokeEnded(0, _currentStroke.Points.Count);
+                    uint checksum = Features.Drawing.Service.Network.DrawingNetworkService.ComputeStrokeChecksum(_currentStroke.Points);
+                    _networkService.OnLocalStrokeEnded(checksum, _currentStroke.Points.Count);
                 }
             }
             

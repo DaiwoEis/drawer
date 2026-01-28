@@ -125,6 +125,15 @@
     *   幽灵笔触淡出并消失。
     *   不提交任何命令。
 
+#### 场景 E: 严格校验失败
+*   如果检测到非法包（长度不符/序列断裂无冗余）:
+    *   触发 `AbortStroke(X)` 并清理远端上下文。
+
+#### 场景 F: EndStroke 校验失败
+*   若 `Checksum != 0` 且校验和不一致:
+    *   严格模式：拒绝提交并清理 `StrokeId`。
+    *   非严格模式：记录告警并仍然提交（用于排查与兼容）。
+
 #### 场景 D: 并发 (绘制中撤销)
 *   用户 A 正在画 Stroke 100。
 *   用户 A 在抬笔前按下了撤销 (快捷键)。
@@ -137,6 +146,8 @@
 
 ### 第一阶段: 基础建设
 1.  定义 `NetworkStrokePacket` 结构体。
+    - `UpdateStroke` 包含 PayloadLength/RedundantPayloadLength，接收端必须按长度解码。
+    - 发送侧允许池化；`SendUpdateStroke` 后 payload 可被回收，接收侧如需异步访问必须复制。
 2.  实现 `StrokeDeltaCompressor` (增量压缩器)。
 3.  创建 `GhostOverlayRenderer` (初期可直接复用 CanvasRenderer 逻辑，但操作不同的 RT)。
 

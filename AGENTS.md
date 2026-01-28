@@ -122,6 +122,11 @@ graph TD
     *   **Delta Compression**: Uses `StrokeDeltaCompressor` (VarInt + Relative) to minimize bandwidth.
     *   **Adaptive Batching**: Aggregates points (10 count or 33ms) to balance overhead and latency.
     *   **Redundancy**: Includes previous batch data in packets to recover from packet loss (1-packet lookback).
+    *   **Payload Lengths**: `UpdateStroke` packets carry explicit payload lengths; receivers must respect lengths (pooled buffers may be larger than logical data).
+    *   **Payload Ownership**: `SendUpdateStroke` treats payload buffers as transient; clients must copy if used asynchronously. Callers may recycle pooled buffers immediately after send.
+    *   **Checksum**: `EndStroke` includes a checksum (FNV-1a 32-bit) computed over `(X,Y,Pressure)` for each `LogicPoint` in order. Used to detect desync; strict mode can reject mismatches.
+    *   **Brush Validation**: `UNKNOWN_BRUSH_ID` can be rejected when strict/whitelist validation is enabled.
+    *   **Build Defaults**: In Debug/Development, strict validation + unknown rejection default ON. Release defaults OFF (override via `_useBuildDefaults`).
     *   **Prediction**: Uses Client-Side Extrapolation (Velocity-based) to mask network jitter in the Ghost Layer.
     *   **Ghost Rendering**: Drives `GhostOverlayRenderer` in a retained loop.
     *   **Commit**: On `EndStroke`, reconstructs the full `StrokeEntity` and commits it to `DrawingAppService`.

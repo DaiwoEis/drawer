@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using System.Buffers;
 using Features.Drawing.Domain.Network;
 using Features.Drawing.Domain.ValueObject;
 using Features.Drawing.Domain.Interface;
@@ -20,6 +21,9 @@ namespace Features.Drawing.Service.Network
 
         [Header("Security")]
         [SerializeField] private int _maxActiveRemoteStrokes = 32;
+        [SerializeField] private bool _useBuildDefaults = true;
+        [SerializeField] private bool _strictPacketValidation = true;
+        [SerializeField] private bool _rejectUnknownBrushId = true;
         // _maxPointsPerUpdate removed as packet.Count (byte) limits us to 255 points, which is safe.
 
         // Dependencies
@@ -38,11 +42,30 @@ namespace Features.Drawing.Service.Network
         private ushort _currentSequence;
         private LogicPoint _lastSentPoint;
         private float _lastSendTime; // For adaptive batching
-        private byte[] _lastSentPayload; // For redundancy
+        private byte[] _redundantBuffer = new byte[4096];
+        private int _redundantLength;
 
         // Reusable Buffers for Zero-GC
         private byte[] _compressionBuffer = new byte[4096]; // 4KB should be enough for a batch of 10-20 points
         private List<LogicPoint> _decompressionBuffer = new List<LogicPoint>(64);
+        private bool _missingGhostLogged = false;
+
+        private void Awake()
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (_useBuildDefaults)
+            {
+                _strictPacketValidation = true;
+                _rejectUnknownBrushId = true;
+            }
+#else
+            if (_useBuildDefaults)
+            {
+                _strictPacketValidation = false;
+                _rejectUnknownBrushId = false;
+            }
+#endif
+        }
 
         public void Initialize(IDrawingNetworkClient client)
         {
@@ -77,7 +100,7 @@ namespace Features.Drawing.Service.Network
             _pendingLocalPoints.Clear();
             _lastSentPoint = default; // Will be set on first point add
             _lastSendTime = Time.time;
-            _lastSentPayload = null;
+            _redundantLength = 0;
 
             // Construct Begin Packet
             ushort resolvedBrushId = isEraser
@@ -152,16 +175,27 @@ namespace Features.Drawing.Service.Network
                 int remaining = _pendingLocalPoints.Count - processedCount;
                 int batchSize = Mathf.Min(remaining, 255);
                 
-                // Get range slice
-                var batchPoints = _pendingLocalPoints.GetRange(processedCount, batchSize);
-                
                 // Zero-GC Compression (using reusable buffer)
                 // Ensure buffer is large enough? 4KB is plenty for 255 points
-                
-                int bytesWritten = StrokeDeltaCompressor.Compress(_lastSentPoint, batchPoints, _compressionBuffer, 0);
-                
-                byte[] payload = new byte[bytesWritten];
+                int bytesWritten = StrokeDeltaCompressor.Compress(_lastSentPoint, _pendingLocalPoints, processedCount, batchSize, _compressionBuffer, 0);
+
+                if (bytesWritten <= 0)
+                {
+                    processedCount += batchSize;
+                    continue;
+                }
+
+                byte[] payload = ArrayPool<byte>.Shared.Rent(bytesWritten);
                 System.Buffer.BlockCopy(_compressionBuffer, 0, payload, 0, bytesWritten);
+                
+                byte[] redundantPayload = null;
+                int redundantLength = 0;
+                if (_redundantLength > 0)
+                {
+                    redundantLength = _redundantLength;
+                    redundantPayload = ArrayPool<byte>.Shared.Rent(redundantLength);
+                    System.Buffer.BlockCopy(_redundantBuffer, 0, redundantPayload, 0, redundantLength);
+                }
                 
                 var packet = new UpdateStrokePacket
                 {
@@ -169,14 +203,24 @@ namespace Features.Drawing.Service.Network
                     Sequence = _currentSequence++,
                     Count = (byte)batchSize,
                     Payload = payload,
-                    RedundantPayload = _lastSentPayload
+                    PayloadLength = bytesWritten,
+                    PayloadIsPooled = true,
+                    RedundantPayload = redundantPayload,
+                    RedundantPayloadLength = redundantLength,
+                    RedundantPayloadIsPooled = redundantPayload != null
                 };
 
                 _networkClient.SendUpdateStroke(packet);
+                ReleasePooledPacket(packet);
                 
                 // Update state for next batch
-                _lastSentPoint = batchPoints[batchPoints.Count - 1];
-                _lastSentPayload = payload;
+                _lastSentPoint = _pendingLocalPoints[processedCount + batchSize - 1];
+                if (_redundantBuffer.Length < bytesWritten)
+                {
+                    _redundantBuffer = new byte[bytesWritten];
+                }
+                System.Buffer.BlockCopy(_compressionBuffer, 0, _redundantBuffer, 0, bytesWritten);
+                _redundantLength = bytesWritten;
                 
                 processedCount += batchSize;
             }
@@ -187,6 +231,16 @@ namespace Features.Drawing.Service.Network
 
         private void Update()
         {
+            if (_ghostRenderer == null)
+            {
+                if (!_missingGhostLogged)
+                {
+                    Debug.LogError("[DrawingNetworkService] GhostOverlayRenderer missing. Remote rendering disabled.");
+                    _missingGhostLogged = true;
+                }
+                return;
+            }
+
             if (_activeRemoteStrokes.Count > 0)
             {
                 // Prediction & Retained Rendering Loop
@@ -240,6 +294,12 @@ namespace Features.Drawing.Service.Network
                 return;
             }
 
+            if (!IsBrushIdAllowed(packet.BrushId))
+            {
+                Debug.LogWarning($"[Security] Ignored remote stroke {packet.StrokeId}. Invalid brushId {packet.BrushId}.");
+                return;
+            }
+
             // Setup Renderer
             var context = new RemoteStrokeContext(packet.StrokeId, _ghostRenderer);
             context.SetMetadata(packet); // Store metadata
@@ -256,14 +316,55 @@ namespace Features.Drawing.Service.Network
             if (_activeRemoteStrokes.TryGetValue(packet.StrokeId, out var context))
             {
                 // Security: Payload check
-                if (packet.Payload == null) return;
-                if (packet.Payload.Length > 1024 * 10) // 10KB limit per packet
+                if (packet.Payload == null)
+                {
+                    ReleasePooledPacket(packet);
+                    if (_strictPacketValidation) AbortAndClearRemoteStroke(packet.StrokeId);
+                    return;
+                }
+                if (packet.PayloadLength <= 0 || packet.PayloadLength > packet.Payload.Length)
+                {
+                    ReleasePooledPacket(packet);
+                    if (_strictPacketValidation) AbortAndClearRemoteStroke(packet.StrokeId);
+                    return;
+                }
+                if (packet.PayloadLength > 1024 * 10) // 10KB limit per packet
                 {
                      Debug.LogWarning($"[Security] Update packet too large for stroke {packet.StrokeId}.");
+                     ReleasePooledPacket(packet);
+                     if (_strictPacketValidation) AbortAndClearRemoteStroke(packet.StrokeId);
                      return;
+                }
+                if (packet.Count == 0)
+                {
+                    Debug.LogWarning($"[Security] Update packet with zero count for stroke {packet.StrokeId}.");
+                    ReleasePooledPacket(packet);
+                    if (_strictPacketValidation) AbortAndClearRemoteStroke(packet.StrokeId);
+                    return;
+                }
+                int minBytes = packet.Count * 3; // 1x + 1y + 1p (min)
+                if (packet.PayloadLength < minBytes)
+                {
+                    Debug.LogWarning($"[Security] Update packet payload too small for stroke {packet.StrokeId} (count={packet.Count}, len={packet.PayloadLength}).");
+                    ReleasePooledPacket(packet);
+                    if (_strictPacketValidation) AbortAndClearRemoteStroke(packet.StrokeId);
+                    return;
+                }
+
+                int expectedSeq = context.LastReceivedSequenceId + 1;
+                if (packet.Sequence > expectedSeq + 1 && (packet.RedundantPayload == null || packet.RedundantPayloadLength <= 0))
+                {
+                    Debug.LogWarning($"[Network] Gap detected without redundancy for stroke {packet.StrokeId}. Expected {expectedSeq}, got {packet.Sequence}.");
+                    if (_strictPacketValidation) AbortAndClearRemoteStroke(packet.StrokeId);
                 }
                 
                 context.ProcessUpdate(packet);
+
+                ReleasePooledPacket(packet);
+            }
+            else
+            {
+                ReleasePooledPacket(packet);
             }
         }
 
@@ -277,6 +378,29 @@ namespace Features.Drawing.Service.Network
                 var points = context.GetFullPoints();
                 if (points.Count > 0)
                 {
+                    if (packet.TotalPoints > 0 && packet.TotalPoints != points.Count)
+                    {
+                        Debug.LogWarning($"[Network] EndStroke point mismatch for stroke {packet.StrokeId}. Packet={packet.TotalPoints}, Local={points.Count}.");
+                        if (_strictPacketValidation)
+                        {
+                            _activeRemoteStrokes.Remove(packet.StrokeId);
+                            return;
+                        }
+                    }
+                    if (packet.Checksum != 0)
+                    {
+                        uint computed = ComputeStrokeChecksum(points);
+                        if (computed != packet.Checksum)
+                        {
+                            Debug.LogWarning($"[Network] EndStroke checksum mismatch for stroke {packet.StrokeId}. Packet={packet.Checksum}, Local={computed}.");
+                            if (_strictPacketValidation)
+                            {
+                                _activeRemoteStrokes.Remove(packet.StrokeId);
+                                return;
+                            }
+                        }
+                    }
+
                     // Construct StrokeEntity
                     var meta = context.Metadata;
                     var stroke = new Features.Drawing.Domain.Entity.StrokeEntity(
@@ -295,6 +419,10 @@ namespace Features.Drawing.Service.Network
                     // 2. Notify Listeners (AppService)
                     OnRemoteStrokeCommitted?.Invoke(stroke);
                 }
+                else
+                {
+                    Debug.LogWarning($"[Network] EndStroke received with no points for stroke {packet.StrokeId}.");
+                }
                 
                 // 3. Clear Ghost
                 _activeRemoteStrokes.Remove(packet.StrokeId);
@@ -306,6 +434,14 @@ namespace Features.Drawing.Service.Network
             if (_activeRemoteStrokes.ContainsKey(packet.StrokeId))
             {
                 _activeRemoteStrokes.Remove(packet.StrokeId);
+            }
+        }
+
+        private void AbortAndClearRemoteStroke(uint strokeId)
+        {
+            if (_activeRemoteStrokes.ContainsKey(strokeId))
+            {
+                _activeRemoteStrokes.Remove(strokeId);
             }
         }
 
@@ -322,6 +458,63 @@ namespace Features.Drawing.Service.Network
             byte b = (byte)((color >> 8) & 0xFF);
             byte a = (byte)(color & 0xFF);
             return new Color32(r, g, b, a);
+        }
+
+        public static uint ComputeStrokeChecksum(IReadOnlyList<LogicPoint> points)
+        {
+            if (points == null || points.Count == 0) return 0;
+
+            const uint FnvOffset = 2166136261u;
+            const uint FnvPrime = 16777619u;
+            uint hash = FnvOffset;
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                LogicPoint p = points[i];
+
+                hash ^= (byte)(p.X & 0xFF);
+                hash *= FnvPrime;
+                hash ^= (byte)((p.X >> 8) & 0xFF);
+                hash *= FnvPrime;
+
+                hash ^= (byte)(p.Y & 0xFF);
+                hash *= FnvPrime;
+                hash ^= (byte)((p.Y >> 8) & 0xFF);
+                hash *= FnvPrime;
+
+                hash ^= p.Pressure;
+                hash *= FnvPrime;
+            }
+
+            hash ^= (uint)points.Count;
+            hash *= FnvPrime;
+
+            return hash;
+        }
+
+        private void ReleasePooledPacket(UpdateStrokePacket packet)
+        {
+            if (packet.PayloadIsPooled && packet.Payload != null)
+            {
+                ArrayPool<byte>.Shared.Return(packet.Payload);
+            }
+            if (packet.RedundantPayloadIsPooled && packet.RedundantPayload != null)
+            {
+                ArrayPool<byte>.Shared.Return(packet.RedundantPayload);
+            }
+        }
+
+        private bool IsBrushIdAllowed(ushort brushId)
+        {
+            if (brushId == Common.Constants.DrawingConstants.ERASER_BRUSH_ID) return true;
+
+            // If no registry, we cannot validate
+            if (_brushRegistry == null) return true;
+
+            // Allow UNKNOWN for compatibility but warn elsewhere
+            if (brushId == Common.Constants.DrawingConstants.UNKNOWN_BRUSH_ID) return !_rejectUnknownBrushId;
+
+            return _brushRegistry.GetBrushStrategy(brushId) != null;
         }
     }
 }

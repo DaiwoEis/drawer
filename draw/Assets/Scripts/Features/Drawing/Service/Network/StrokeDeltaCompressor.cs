@@ -21,16 +21,23 @@ namespace Features.Drawing.Service.Network
         public static int Compress(LogicPoint origin, List<LogicPoint> points, byte[] targetBuffer, int bufferOffset = 0)
         {
             if (points == null || points.Count == 0) return 0;
+            return Compress(origin, points, 0, points.Count, targetBuffer, bufferOffset);
+        }
+
+        public static int Compress(LogicPoint origin, List<LogicPoint> points, int startIndex, int count, byte[] targetBuffer, int bufferOffset = 0)
+        {
+            if (points == null || points.Count == 0 || count <= 0) return 0;
             if (targetBuffer == null) return 0;
 
             int offset = bufferOffset;
             LogicPoint prev = origin;
             int maxOffset = targetBuffer.Length;
+            int endIndex = startIndex + count;
 
-            for (int i = 0; i < points.Count; i++)
+            for (int i = startIndex; i < endIndex; i++)
             {
                 var p = points[i];
-                
+
                 // Check buffer space (conservative check: max 3 bytes per coord + 1 byte pressure = 7 bytes)
                 if (offset + 7 >= maxOffset)
                 {
@@ -75,62 +82,64 @@ namespace Features.Drawing.Service.Network
         public static void Decompress(LogicPoint origin, byte[] data, List<LogicPoint> targetList)
         {
             if (data == null || data.Length == 0) return;
+            Decompress(origin, data, 0, data.Length, targetList);
+        }
+
+        public static void Decompress(LogicPoint origin, byte[] data, int offset, int length, List<LogicPoint> targetList)
+        {
+            if (data == null || length <= 0) return;
             if (targetList == null) return;
 
-            // targetList.Clear(); // Caller responsibility? Usually yes, let's assume caller wants to append or clear.
-            // Documentation says "Populates", usually implies append or fill. Let's Append.
-            
-            int offset = 0;
-            int length = data.Length;
+            int end = offset + length;
+            if (offset < 0 || end > data.Length) return;
+
             LogicPoint prev = origin;
 
-            while (offset < length)
+            while (offset < end)
             {
                 // Safety check: Min 3 bytes needed (1x + 1y + 1p)
-                if (length - offset < 3) 
-                {
-                    break;
-                }
+                if (end - offset < 3) break;
 
                 ushort x;
-                int readX = ReadCoordinate(data, offset, prev.X, out x);
+                int readX;
+                if (!TryReadCoordinate(data, offset, end, prev.X, out x, out readX)) break;
                 offset += readX;
-                
-                // Check bounds again for Y (min 2 bytes remaining)
-                if (length - offset < 2) break;
 
                 ushort y;
-                int readY = ReadCoordinate(data, offset, prev.Y, out y);
+                int readY;
+                if (!TryReadCoordinate(data, offset, end, prev.Y, out y, out readY)) break;
                 offset += readY;
 
-                // Check bounds for Pressure (1 byte)
-                if (offset >= length) break;
-                
+                if (offset >= end) break;
+
                 byte p = data[offset++];
-                
                 var point = new LogicPoint(x, y, p);
                 targetList.Add(point);
                 prev = point;
             }
         }
 
-        private static int ReadCoordinate(byte[] buffer, int offset, ushort previous, out ushort result)
+        private static bool TryReadCoordinate(byte[] buffer, int offset, int end, ushort previous, out ushort result, out int bytesRead)
         {
+            result = 0;
+            bytesRead = 0;
+
+            if (offset >= end) return false;
+
             sbyte val = (sbyte)buffer[offset];
             if (val == ESCAPE_MARKER)
             {
-                // Ensure we have enough bytes (checked in loop but good to be safe)
-                // We need offset+1 and offset+2
+                if (offset + 2 >= end) return false;
                 int b1 = buffer[offset + 1];
                 int b2 = buffer[offset + 2];
                 result = (ushort)(b1 | (b2 << 8));
-                return 3;
+                bytesRead = 3;
+                return true;
             }
-            else
-            {
-                result = (ushort)((int)previous + val);
-                return 1;
-            }
+
+            result = (ushort)((int)previous + val);
+            bytesRead = 1;
+            return true;
         }
     }
 }
