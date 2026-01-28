@@ -226,6 +226,11 @@ namespace Features.Drawing.Service.Network
             
             var context = new RemoteStrokeContext(packet.StrokeId, _ghostRenderer);
             context.SetMetadata(packet); // Store metadata
+            
+            // Resolve Strategy and pass to context
+            var strategy = _appService.GetBrushStrategy(packet.BrushId);
+            context.SetStrategy(strategy);
+
             _activeRemoteStrokes.Add(packet.StrokeId, context);
             
             // Setup Visuals (We should store this in context to re-apply later)

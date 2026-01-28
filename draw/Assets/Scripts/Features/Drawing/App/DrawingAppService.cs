@@ -633,7 +633,7 @@ namespace Features.Drawing.App
             
             _renderer.EndStroke();
         }
-        private BrushStrategy GetBrushStrategy(ushort id)
+        public BrushStrategy GetBrushStrategy(ushort id)
         {
             if (id == DrawingConstants.ERASER_BRUSH_ID) return _eraserStrategy;
             if (_registeredBrushes != null && id < _registeredBrushes.Length)

@@ -23,12 +23,7 @@ namespace Features.Drawing.Service.Network
         
         // Rendering State
         private readonly GhostOverlayRenderer _ghostRenderer;
-        
-        // Prediction State
-        private float _lastPacketTime;
-        private Vector2 _velocity; // Pixels (LogicUnits) per second
-        private const float PREDICTION_THRESHOLD = 0.033f; // Start predicting after 33ms silence
-        private const float MAX_PREDICTION_TIME = 0.100f; // Max 100ms prediction
+        private Features.Drawing.Domain.BrushStrategy _strategy;
 
         public RemoteStrokeContext(uint strokeId, GhostOverlayRenderer ghostRenderer)
         {
@@ -38,10 +33,21 @@ namespace Features.Drawing.Service.Network
             _lastPacketTime = Time.time;
         }
 
+        public void SetStrategy(Features.Drawing.Domain.BrushStrategy strategy)
+        {
+            _strategy = strategy;
+        }
+
         public void SetMetadata(BeginStrokePacket metadata)
         {
             Metadata = metadata;
         }
+
+        // Prediction State
+        private float _lastPacketTime;
+        private Vector2 _velocity; // Pixels (LogicUnits) per second
+        private const float PREDICTION_THRESHOLD = 0.033f; // Start predicting after 33ms silence
+        private const float MAX_PREDICTION_TIME = 0.100f; // Max 100ms prediction
 
         public void ProcessUpdate(UpdateStrokePacket packet)
         {
@@ -159,7 +165,7 @@ namespace Features.Drawing.Service.Network
                 isEraser = Metadata.BrushId == 1;
             }
 
-            _ghostRenderer.DrawGhostStroke(pointsToDraw, size, color, isEraser);
+            _ghostRenderer.DrawGhostStroke(pointsToDraw, size, color, isEraser, _strategy);
         }
 
         public List<LogicPoint> GetFullPoints()

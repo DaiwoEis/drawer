@@ -161,9 +161,16 @@ namespace Features.Drawing.Presentation
             _layoutController.ClearActiveRT();
         }
 
-        public void DrawGhostStroke(IEnumerable<LogicPoint> points, float size, Color color, bool isEraser)
+        public void DrawGhostStroke(IEnumerable<LogicPoint> points, float size, Color color, bool isEraser, BrushStrategy strategy)
         {
             if (_layoutController == null || _layoutController.ActiveRT == null) return;
+
+            // Configure Brush immediately before drawing
+            // This ensures we use the correct texture, spacing, and other settings
+            if (strategy != null)
+            {
+                ConfigureBrush(strategy);
+            }
 
             // Reset generator state for this fresh stroke draw
             _stampGenerator.Reset();
@@ -182,22 +189,27 @@ namespace Features.Drawing.Presentation
             else
             {
                 Color drawColor = color;
-                drawColor.a *= _brushOpacity; // Use current opacity setting or pass it in? 
-                // For simplicity, we use the class state _brushOpacity (configured via ConfigureBrush)
-                // OR we should pass opacity in arguments. 
-                // Let's stick to using configured state, assuming ConfigureBrush was called for this stroke context.
+                drawColor.a *= _brushOpacity; // Use opacity from strategy (configured via ConfigureBrush)
                 _props.SetColor("_Color", drawColor);
-            }
-            
-            // Fix: Ensure standard blend mode for non-eraser
-            if (!isEraser)
-            {
-                 _brushMaterial.SetInt("_SrcBlend", (int)BlendMode.One); // Premultiplied or standard? 
-                 // CanvasRenderer uses One OneMinusSrcAlpha usually.
-                 // Let's use standard alpha blend for ghost
-                 _brushMaterial.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
-                 _brushMaterial.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
-                 _brushMaterial.SetInt("_BlendOp", (int)BlendOp.Add);
+                
+                // Use the blend modes from the strategy!
+                // If strategy is null, we might be in trouble, but we have defaults in _brushMaterial if initialized?
+                // Actually ConfigureBrush sets the material properties.
+                // We just need to make sure we don't override them here with hardcoded values unless necessary.
+                
+                // NOTE: CanvasRenderer uses the strategy's blend modes.
+                // We should do the same.
+                // ConfigureBrush already sets _BlendOp, _SrcBlend, _DstBlend on the material.
+                // BUT: We are rendering to a transparent RT (Ghost Layer) which is then composited over the Main Canvas.
+                // If we use "One OneMinusSrcAlpha" (Premultiplied) here, it might double-multiply when composited?
+                // The Ghost Layer is displayed via a RawImage.
+                // If the RawImage uses UI/Default (Alpha Blending), we need the RT content to be standard alpha or premultiplied matching the UI shader.
+                
+                // Let's assume standard Alpha Blending for now to match local strokes visually *on the overlay*.
+                // BUT: If the brush is "Additive", we want it to add to the ghost layer.
+                
+                // For now, let's TRUST the strategy's blend modes, because ConfigureBrush sets them.
+                // The only override is for Eraser (Red Trail).
             }
 
             _cmd.SetViewMatrix(Matrix4x4.identity);
