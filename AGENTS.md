@@ -77,6 +77,7 @@ graph TD
 
 1.  **Presentation (Unity)**:
     *   **CanvasRenderer**: Handles `CommandBuffer`, `Mesh`, `Material`. **Purely visual**.
+    *   **CanvasLayoutController**: Manages Resolution/Aspect Ratio and RenderTextures (separated from Renderer).
     *   **GhostOverlayRenderer**: Handles transient rendering of remote strokes (Red trail for eraser).
     *   **Rules**: Never put business logic here. Uses **Retained Mode** (Redraw per frame) to support prediction.
 2.  **Application (App)**:

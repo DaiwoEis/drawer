@@ -46,7 +46,7 @@ Drawer 采用 **混合同步模型 (Hybrid Sync Model)**，结合了实时瞬态
 
 ## 4. 协议定义
 参见 `NetworkStrokePacket.cs`。
-- `BeginStroke`: 笔刷元数据 (Color, Size, Seed)。
+- `BeginStroke`: 笔刷元数据 (Color, Size, Seed)。**注意：不包含起始坐标，起始点通过随后的 UpdateStroke 发送。**
 - `UpdateStroke`: 序列号 + 增量数据 + 冗余数据 + **显式数据长度** (PayloadLength/RedundantPayloadLength，用于池化缓冲区)。
 - `EndStroke`: 校验和 + 总点数 (用于最终完整性检查)。
 

@@ -290,6 +290,13 @@ namespace Features.Drawing.App
             _lastAddedPoint = point;
             AddPoint(point);
             _currentStabilizedPos = point.ToNormalized();
+
+            // Network Sync: Send the first point immediately
+            // This is critical because BeginStrokePacket does not contain coordinates.
+            if (_networkService != null && _networkService.isActiveAndEnabled)
+            {
+                _networkService.OnLocalStrokeMoved(point);
+            }
         }
 
         public void MoveStroke(LogicPoint point)
