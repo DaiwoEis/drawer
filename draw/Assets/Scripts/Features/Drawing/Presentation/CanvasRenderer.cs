@@ -356,14 +356,47 @@ namespace Features.Drawing.Presentation
 
         /// <summary>
         /// Draws a batch of points to the RenderTexture.
+        /// Optimized overload for List to avoid Boxing.
+        /// </summary>
+        public void DrawPoints(List<LogicPoint> points)
+        {
+            if (points == null || points.Count == 0) return;
+            DrawPointsInternal(points, points.Count);
+        }
+
+        /// <summary>
+        /// Interface implementation (boxing fallback).
         /// </summary>
         public void DrawPoints(IEnumerable<LogicPoint> points)
+        {
+             if (points == null) return;
+             
+             // Optimization: Check if it's actually a list
+             if (points is List<LogicPoint> list)
+             {
+                 DrawPoints(list);
+                 return;
+             }
+
+             // Slow path
+             // We need to convert to list or iterate. 
+             // Since internal logic needs a list or array for GPU/Stamping?
+             // Actually ProcessPoints takes IEnumerable.
+             // But let's consolidate logic.
+             // To avoid allocation, we can't easily convert to List without new.
+             // But we can just run the logic.
+             
+             DrawPointsInternal(points, -1);
+        }
+
+        private void DrawPointsInternal(IEnumerable<LogicPoint> points, int countHint)
         {
             if (_layoutController.ActiveRT == null)
             {
                 Debug.LogError("[CanvasRenderer] ActiveRT is null!");
                 return;
             }
+
 
             _layoutController.CheckLayoutChanges();
             _cmd.Clear();
@@ -397,11 +430,16 @@ namespace Features.Drawing.Presentation
             // Heuristic: GPU overhead is not worth it for small batches (e.g. real-time drawing).
             // Also, GPU implementation is stateless and doesn't handle distance accumulation across small batches well.
             // So we only use GPU for large batch processing (e.g. redraw, history undo/redo).
-            int pointsCount = 0;
-            if (points is ICollection<LogicPoint> col) pointsCount = col.Count;
-            else { foreach(var _ in points) pointsCount++; }
+            
+            int pointsCount = countHint >= 0 ? countHint : 0;
+            if (countHint < 0)
+            {
+                if (points is ICollection<LogicPoint> col) pointsCount = col.Count;
+                else { foreach(var _ in points) pointsCount++; }
+            }
 
             bool shouldTryGpu = !_forceCpuMode && _useGpuStamping && _gpuStampGenerator != null && pointsCount > 10;
+
 
             if (shouldTryGpu)
             {

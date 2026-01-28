@@ -20,7 +20,7 @@ namespace Features.Drawing.App
     /// Facade service that coordinates input, domain logic, and rendering.
     /// This is the main entry point for the drawing feature.
     /// </summary>
-    public class DrawingAppService : MonoBehaviour, IInputHandler
+    public class DrawingAppService : MonoBehaviour, IInputHandler, IBrushRegistry
     {
         [Header("References")]
         [SerializeField] private Features.Drawing.Presentation.CanvasRenderer _concreteRenderer; 
@@ -110,6 +110,12 @@ namespace Features.Drawing.App
         public void SetNetworkService(Features.Drawing.Service.Network.DrawingNetworkService networkService)
         {
             _networkService = networkService;
+            if (_networkService != null)
+            {
+                // Subscribe to network events
+                _networkService.OnRemoteStrokeCommitted += CommitRemoteStroke;
+                _networkService.InitializeBrushRegistry(this);
+            }
         }
 
         /// <summary>

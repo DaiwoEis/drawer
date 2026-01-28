@@ -64,51 +64,38 @@ namespace Features.Drawing.Service.Network
                 if (actualSeq == expectedSeq + 1 && packet.RedundantPayload != null)
                 {
                     LogicPoint recoveryOrigin = _points.Count > 0 ? _points[_points.Count - 1] : new LogicPoint(0, 0, 0);
-                    var recoveredPoints = StrokeDeltaCompressor.Decompress(recoveryOrigin, packet.RedundantPayload);
-                    if (recoveredPoints.Count > 0)
-                    {
-                        ProcessPointsBatch(recoveredPoints);
-                        _lastReceivedSequenceId = actualSeq - 1; 
-                    }
+                    StrokeDeltaCompressor.Decompress(recoveryOrigin, packet.RedundantPayload, _points);
+                    _lastReceivedSequenceId = actualSeq - 1; 
                 }
             }
             
             if (actualSeq <= _lastReceivedSequenceId) return;
 
             LogicPoint origin = _points.Count > 0 ? _points[_points.Count - 1] : new LogicPoint(0, 0, 0);
-            var newPoints = StrokeDeltaCompressor.Decompress(origin, packet.Payload);
+            StrokeDeltaCompressor.Decompress(origin, packet.Payload, _points);
             
-            if (newPoints.Count > 0)
-            {
-                ProcessPointsBatch(newPoints);
-                _lastReceivedSequenceId = actualSeq;
-            }
-        }
-
-        private void ProcessPointsBatch(List<LogicPoint> newPoints)
-        {
-            // Update Velocity for Prediction
-            if (_points.Count > 0)
-            {
-                LogicPoint prev = _points[_points.Count - 1];
-                LogicPoint curr = newPoints[newPoints.Count - 1];
-                
-                float dt = Time.time - _lastPacketTime;
-                if (dt > 0.001f)
-                {
-                    Vector2 displacement = new Vector2(curr.X - prev.X, curr.Y - prev.Y);
-                    // Simple EMA for smoother velocity? Or instant?
-                    // Let's use instant for responsiveness, or slight smoothing.
-                    Vector2 instantVel = displacement / dt;
-                    _velocity = Vector2.Lerp(_velocity, instantVel, 0.5f);
-                }
-            }
-            
+            // Update velocity and state
+            UpdateVelocity(packet.Payload.Length); // Simplified velocity check
+            _lastReceivedSequenceId = actualSeq;
             _lastPacketTime = Time.time;
-
-            // Add to buffer
-            _points.AddRange(newPoints);
         }
+
+        private void UpdateVelocity(int pointsAdded)
+        {
+             if (_points.Count < 2) return;
+             
+             LogicPoint curr = _points[_points.Count - 1];
+             LogicPoint prev = _points[_points.Count - 2];
+             
+             float dt = Time.time - _lastPacketTime;
+             if (dt > 0.001f)
+             {
+                 Vector2 displacement = new Vector2(curr.X - prev.X, curr.Y - prev.Y);
+                 Vector2 instantVel = displacement / dt;
+                 _velocity = Vector2.Lerp(_velocity, instantVel, 0.5f);
+             }
+        }
+
 
         public void Update(float deltaTime)
         {

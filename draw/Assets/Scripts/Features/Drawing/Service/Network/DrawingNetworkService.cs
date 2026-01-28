@@ -15,11 +15,19 @@ namespace Features.Drawing.Service.Network
     public class DrawingNetworkService : MonoBehaviour
     {
         [Header("References")]
-        [SerializeField] private DrawingAppService _appService;
+        // Decoupled: Removed direct reference to DrawingAppService
         [SerializeField] private Features.Drawing.Presentation.GhostOverlayRenderer _ghostRenderer;
+
+        [Header("Security")]
+        [SerializeField] private int _maxActiveRemoteStrokes = 32;
+        // _maxPointsPerUpdate removed as packet.Count (byte) limits us to 255 points, which is safe.
 
         // Dependencies
         private IDrawingNetworkClient _networkClient;
+        private IBrushRegistry _brushRegistry;
+
+        // Events
+        public event System.Action<Features.Drawing.Domain.Entity.StrokeEntity> OnRemoteStrokeCommitted;
         
         // State
         private Dictionary<uint, RemoteStrokeContext> _activeRemoteStrokes = new Dictionary<uint, RemoteStrokeContext>();
@@ -32,6 +40,10 @@ namespace Features.Drawing.Service.Network
         private float _lastSendTime; // For adaptive batching
         private byte[] _lastSentPayload; // For redundancy
 
+        // Reusable Buffers for Zero-GC
+        private byte[] _compressionBuffer = new byte[4096]; // 4KB should be enough for a batch of 10-20 points
+        private List<LogicPoint> _decompressionBuffer = new List<LogicPoint>(64);
+
         public void Initialize(IDrawingNetworkClient client)
         {
             _networkClient = client;
@@ -39,6 +51,11 @@ namespace Features.Drawing.Service.Network
             {
                 _networkClient.OnPacketReceived += OnPacketReceived;
             }
+        }
+
+        public void InitializeBrushRegistry(IBrushRegistry registry)
+        {
+            _brushRegistry = registry;
         }
 
         private void OnDestroy()
@@ -127,39 +144,45 @@ namespace Features.Drawing.Service.Network
         {
             if (_pendingLocalPoints.Count == 0) return;
 
-            // Compress
-            // Origin for compression is the Last Sent Point (or 0,0 if first batch).
-            // Wait, StrokeDeltaCompressor logic:
-            // Compress(origin, list) -> writes delta from origin to list[0], then list[0] to list[1]...
-            
-            // For the first batch: origin is (0,0)?
-            // If we pass (0,0), and first point is (100,100). Delta is 100.
-            // If we use _lastSentPoint.
-            // Batch 1: Origin (0,0). Points [A, B, C]. Compressed: (A-0), (B-A), (C-B).
-            // _lastSentPoint becomes C.
-            // Batch 2: Origin C. Points [D, E]. Compressed: (D-C), (E-D).
-            // Correct.
-            
-            // Note: Compress needs an origin. 
-            // _lastSentPoint is the origin for THIS batch.
-            byte[] payload = StrokeDeltaCompressor.Compress(_lastSentPoint, _pendingLocalPoints);
-            
-            var packet = new UpdateStrokePacket
+            // Handle potential overflow if called with > 255 points (though OnLocalStrokeMoved tries to prevent this)
+            // We split into chunks of 255 max.
+            int processedCount = 0;
+            while (processedCount < _pendingLocalPoints.Count)
             {
-                StrokeId = _currentLocalStrokeId,
-                Sequence = _currentSequence++,
-                Count = (byte)_pendingLocalPoints.Count,
-                Payload = payload,
-                RedundantPayload = _lastSentPayload
-            };
+                int remaining = _pendingLocalPoints.Count - processedCount;
+                int batchSize = Mathf.Min(remaining, 255);
+                
+                // Get range slice
+                var batchPoints = _pendingLocalPoints.GetRange(processedCount, batchSize);
+                
+                // Zero-GC Compression (using reusable buffer)
+                // Ensure buffer is large enough? 4KB is plenty for 255 points
+                
+                int bytesWritten = StrokeDeltaCompressor.Compress(_lastSentPoint, batchPoints, _compressionBuffer, 0);
+                
+                byte[] payload = new byte[bytesWritten];
+                System.Buffer.BlockCopy(_compressionBuffer, 0, payload, 0, bytesWritten);
+                
+                var packet = new UpdateStrokePacket
+                {
+                    StrokeId = _currentLocalStrokeId,
+                    Sequence = _currentSequence++,
+                    Count = (byte)batchSize,
+                    Payload = payload,
+                    RedundantPayload = _lastSentPayload
+                };
 
-            _networkClient.SendUpdateStroke(packet);
+                _networkClient.SendUpdateStroke(packet);
+                
+                // Update state for next batch
+                _lastSentPoint = batchPoints[batchPoints.Count - 1];
+                _lastSentPayload = payload;
+                
+                processedCount += batchSize;
+            }
             
-            // Update state
-            _lastSentPoint = _pendingLocalPoints[_pendingLocalPoints.Count - 1];
             _pendingLocalPoints.Clear();
             _lastSendTime = Time.time;
-            _lastSentPayload = payload;
         }
 
         private void Update()
@@ -176,13 +199,6 @@ namespace Features.Drawing.Service.Network
             }
             else
             {
-                // Ensure clear if no strokes
-                // Optimization: Only clear if we were drawing something last frame?
-                // For now, safe clear.
-                // Or check if ghost layer is dirty?
-                // GhostOverlayRenderer doesn't expose dirty flag.
-                // Just calling BeginFrame (Clear) is safe but might be wasteful if empty.
-                // But if empty, it's just a glClear.
                  _ghostRenderer.BeginFrame();
             }
         }
@@ -208,51 +224,44 @@ namespace Features.Drawing.Service.Network
 
         private void HandleBeginStroke(BeginStrokePacket packet)
         {
-            if (_activeRemoteStrokes.ContainsKey(packet.StrokeId)) return; // Duplicate?
+            if (_activeRemoteStrokes.ContainsKey(packet.StrokeId)) return; // Duplicate
+
+            // Security: Limit active strokes to prevent DoS (Memory Exhaustion)
+            if (_activeRemoteStrokes.Count >= _maxActiveRemoteStrokes)
+            {
+                Debug.LogWarning($"[Security] Ignored remote stroke {packet.StrokeId}. Max active strokes ({_maxActiveRemoteStrokes}) reached.");
+                return;
+            }
+
+            // Security: Basic Validation
+            if (packet.Size < 0 || packet.Size > 500) // 500 is a reasonable max brush size
+            {
+                Debug.LogWarning($"[Security] Ignored remote stroke {packet.StrokeId}. Invalid size {packet.Size}.");
+                return;
+            }
 
             // Setup Renderer
-            // Map packet data to BrushStrategy
-            // For now, we create a temporary strategy or use default
-            bool isEraser = packet.BrushId == Common.Constants.DrawingConstants.ERASER_BRUSH_ID;
-            
-            // We need to configure the GhostRenderer for this specific stroke?
-            // Wait, GhostRenderer is a single component. If multiple people draw at once?
-            // GhostOverlayRenderer is global. 
-            // If User A and User B draw simultaneously, switching brush state on the single GhostRenderer will cause flicker.
-            // LIMITATION: Current GhostRenderer assumes single-threaded context (like CanvasRenderer).
-            // For MVP, we assume 1 remote drawer at a time, or accept artifacts.
-            // Ideally: GhostOverlayRenderer should support "DrawCommand" with state, not global state.
-            // Or we just set state before every DrawPoints call (which we do in RemoteStrokeContext).
-            
-            // Configure global ghost renderer for this new stroke context
-            // Note: This only sets the initial state. The context will need to re-apply it before drawing if we support concurrency.
-            // For now, let's just create the context.
-            
             var context = new RemoteStrokeContext(packet.StrokeId, _ghostRenderer);
             context.SetMetadata(packet); // Store metadata
             
             // Resolve Strategy and pass to context
-            var strategy = _appService.GetBrushStrategy(packet.BrushId);
+            var strategy = _brushRegistry?.GetBrushStrategy(packet.BrushId);
             context.SetStrategy(strategy);
 
             _activeRemoteStrokes.Add(packet.StrokeId, context);
-            
-            // Setup Visuals (We should store this in context to re-apply later)
-            // TODO: RemoteStrokeContext should store Brush Config
-            
-            // Apply immediately for visual feedback
-            // Removed direct renderer configuration in favor of Retained Mode in Update()
-            
-            // TODO: Handle BrushStrategy mapping (Soft/Hard/etc)
         }
 
         private void HandleUpdateStroke(UpdateStrokePacket packet)
         {
             if (_activeRemoteStrokes.TryGetValue(packet.StrokeId, out var context))
             {
-                // Re-apply state (Simple concurrency support)
-                // We'd need to store color/size in context.
-                // For MVP, skip re-apply (assumes single remote user).
+                // Security: Payload check
+                if (packet.Payload == null) return;
+                if (packet.Payload.Length > 1024 * 10) // 10KB limit per packet
+                {
+                     Debug.LogWarning($"[Security] Update packet too large for stroke {packet.StrokeId}.");
+                     return;
+                }
                 
                 context.ProcessUpdate(packet);
             }
@@ -263,11 +272,6 @@ namespace Features.Drawing.Service.Network
             if (_activeRemoteStrokes.TryGetValue(packet.StrokeId, out var context))
             {
                 context.Finish();
-                
-                // Clear Ghost Visuals for this stroke
-                // Since GhostRenderer is a single texture, we can't clear *just* this stroke easily without clearing everything.
-                // But `EndStroke` means "Commit". 
-                // We should Clear the Ghost layer and draw the permanent stroke on the AppService.
                 
                 // 1. Reconstruct full stroke entity
                 var points = context.GetFullPoints();
@@ -285,22 +289,14 @@ namespace Features.Drawing.Service.Network
                         0 // Sequence
                     );
                     
-                    // Add points manually or via constructor?
-                    // StrokeEntity constructor takes list? No, it has AddPoints.
-                    // But we can just assign the points via internal/public setter or AddPoints loop.
-                    // StrokeEntity design: Points is a readonly property?
-                    // Let's check StrokeEntity definition.
-                    // Assuming we can add points.
                     stroke.AddPoints(points);
                     stroke.EndStroke();
 
-                    // 2. Commit to AppService
-                    _appService.CommitRemoteStroke(stroke);
+                    // 2. Notify Listeners (AppService)
+                    OnRemoteStrokeCommitted?.Invoke(stroke);
                 }
                 
                 // 3. Clear Ghost
-                // Removed explicit ClearCanvas() as we are now in Retained Mode (cleared every frame).
-                // Just removing from active strokes is enough.
                 _activeRemoteStrokes.Remove(packet.StrokeId);
             }
         }
