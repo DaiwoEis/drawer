@@ -29,6 +29,8 @@ namespace Features.Drawing.Service.Network
         private uint _currentLocalStrokeId;
         private ushort _currentSequence;
         private LogicPoint _lastSentPoint;
+        private float _lastSendTime; // For adaptive batching
+        private byte[] _lastSentPayload; // For redundancy
 
         public void Initialize(IDrawingNetworkClient client)
         {
@@ -57,6 +59,8 @@ namespace Features.Drawing.Service.Network
             _currentSequence = 0;
             _pendingLocalPoints.Clear();
             _lastSentPoint = default; // Will be set on first point add
+            _lastSendTime = Time.time;
+            _lastSentPayload = null;
 
             // Construct Begin Packet
             var packet = new BeginStrokePacket
@@ -84,8 +88,14 @@ namespace Features.Drawing.Service.Network
 
             _pendingLocalPoints.Add(point);
 
-            // Throttle: Send every 10 points (approx 30-50ms at high polling rate)
-            if (_pendingLocalPoints.Count >= 10)
+            // Adaptive Batching:
+            // Send if we have enough points OR if enough time has passed (e.g. 33ms = 30Hz)
+            bool timeThresholdMet = (Time.time - _lastSendTime) >= 0.033f;
+            bool countThresholdMet = _pendingLocalPoints.Count >= 10;
+            
+            // Only send if we have at least 1 point and threshold is met
+            // Exception: If count is very high (buffer overflow protection), send immediately
+            if (_pendingLocalPoints.Count > 0 && (timeThresholdMet || countThresholdMet))
             {
                 FlushPendingPoints();
             }
@@ -126,6 +136,8 @@ namespace Features.Drawing.Service.Network
             // Batch 2: Origin C. Points [D, E]. Compressed: (D-C), (E-D).
             // Correct.
             
+            // Note: Compress needs an origin. 
+            // _lastSentPoint is the origin for THIS batch.
             byte[] payload = StrokeDeltaCompressor.Compress(_lastSentPoint, _pendingLocalPoints);
             
             var packet = new UpdateStrokePacket
@@ -133,7 +145,8 @@ namespace Features.Drawing.Service.Network
                 StrokeId = _currentLocalStrokeId,
                 Sequence = _currentSequence++,
                 Count = (byte)_pendingLocalPoints.Count,
-                Payload = payload
+                Payload = payload,
+                RedundantPayload = _lastSentPayload
             };
 
             _networkClient.SendUpdateStroke(packet);
@@ -141,9 +154,34 @@ namespace Features.Drawing.Service.Network
             // Update state
             _lastSentPoint = _pendingLocalPoints[_pendingLocalPoints.Count - 1];
             _pendingLocalPoints.Clear();
+            _lastSendTime = Time.time;
+            _lastSentPayload = payload;
         }
 
-        // --- Inbound (Receiving) ---
+        private void Update()
+        {
+            if (_activeRemoteStrokes.Count > 0)
+            {
+                // Prediction & Retained Rendering Loop
+                _ghostRenderer.BeginFrame();
+                
+                foreach (var kvp in _activeRemoteStrokes)
+                {
+                    kvp.Value.Update(Time.deltaTime);
+                }
+            }
+            else
+            {
+                // Ensure clear if no strokes
+                // Optimization: Only clear if we were drawing something last frame?
+                // For now, safe clear.
+                // Or check if ghost layer is dirty?
+                // GhostOverlayRenderer doesn't expose dirty flag.
+                // Just calling BeginFrame (Clear) is safe but might be wasteful if empty.
+                // But if empty, it's just a glClear.
+                 _ghostRenderer.BeginFrame();
+            }
+        }
 
         private void OnPacketReceived(object packetObj)
         {
@@ -194,10 +232,7 @@ namespace Features.Drawing.Service.Network
             // TODO: RemoteStrokeContext should store Brush Config
             
             // Apply immediately for visual feedback
-            Color c = UIntToColor(packet.Color);
-            _ghostRenderer.SetBrushColor(c);
-            _ghostRenderer.SetBrushSize(packet.Size);
-            _ghostRenderer.SetEraser(isEraser);
+            // Removed direct renderer configuration in favor of Retained Mode in Update()
             
             // TODO: Handle BrushStrategy mapping (Soft/Hard/etc)
         }
@@ -255,10 +290,8 @@ namespace Features.Drawing.Service.Network
                 }
                 
                 // 3. Clear Ghost
-                // If multiple users, this clears everyone. Bad.
-                // But for MVP:
-                _ghostRenderer.ClearCanvas();
-                
+                // Removed explicit ClearCanvas() as we are now in Retained Mode (cleared every frame).
+                // Just removing from active strokes is enough.
                 _activeRemoteStrokes.Remove(packet.StrokeId);
             }
         }
@@ -268,17 +301,16 @@ namespace Features.Drawing.Service.Network
             if (_activeRemoteStrokes.ContainsKey(packet.StrokeId))
             {
                 _activeRemoteStrokes.Remove(packet.StrokeId);
-                _ghostRenderer.ClearCanvas();
             }
         }
 
-        private uint ColorToUInt(Color color)
+        public static uint ColorToUInt(Color color)
         {
             Color32 c32 = color;
             return (uint)((c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a);
         }
         
-        private Color UIntToColor(uint color)
+        public static Color UIntToColor(uint color)
         {
             byte r = (byte)((color >> 24) & 0xFF);
             byte g = (byte)((color >> 16) & 0xFF);

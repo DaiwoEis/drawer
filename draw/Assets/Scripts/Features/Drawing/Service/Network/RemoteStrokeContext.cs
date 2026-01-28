@@ -1,13 +1,15 @@
 using System.Collections.Generic;
+using UnityEngine;
 using Features.Drawing.Domain.ValueObject;
 using Features.Drawing.Domain.Network;
-using Features.Drawing.Domain.Interface;
+using Features.Drawing.Presentation; // Added for GhostOverlayRenderer
 
 namespace Features.Drawing.Service.Network
 {
     /// <summary>
     /// Manages the state of a single remote stroke being drawn (The "Ghost").
     /// Buffers points and handles rendering to the Ghost Layer.
+    /// Implements Client-Side Prediction (Extrapolation) to smooth out network jitter.
     /// </summary>
     public class RemoteStrokeContext
     {
@@ -17,18 +19,23 @@ namespace Features.Drawing.Service.Network
         
         // Data Buffer
         private List<LogicPoint> _points = new List<LogicPoint>(512);
-        private ushort _lastSequenceId = 0;
+        private int _lastReceivedSequenceId = -1; // -1 means no packets received yet
         
         // Rendering State
-        private readonly IStrokeRenderer _ghostRenderer;
-        private LogicPoint _lastRenderedPoint;
-        private bool _hasRenderedFirstPoint = false;
+        private readonly GhostOverlayRenderer _ghostRenderer;
+        
+        // Prediction State
+        private float _lastPacketTime;
+        private Vector2 _velocity; // Pixels (LogicUnits) per second
+        private const float PREDICTION_THRESHOLD = 0.033f; // Start predicting after 33ms silence
+        private const float MAX_PREDICTION_TIME = 0.100f; // Max 100ms prediction
 
-        public RemoteStrokeContext(uint strokeId, IStrokeRenderer ghostRenderer)
+        public RemoteStrokeContext(uint strokeId, GhostOverlayRenderer ghostRenderer)
         {
             StrokeId = strokeId;
             _ghostRenderer = ghostRenderer;
             IsActive = true;
+            _lastPacketTime = Time.time;
         }
 
         public void SetMetadata(BeginStrokePacket metadata)
@@ -40,57 +47,119 @@ namespace Features.Drawing.Service.Network
         {
             if (!IsActive) return;
 
-            // Decompress payload
-            // We need the origin point for delta decompression.
-            // If this is the first packet, origin is implicit? 
-            // Or we assume the first point in the list is absolute?
-            // Protocol spec says: "First point of stroke ... is absolute".
-            // So if _points is empty, the first point in decompressed list MUST be absolute.
+            // Packet Loss Handling with Redundancy
+            int expectedSeq = _lastReceivedSequenceId + 1;
+            int actualSeq = packet.Sequence;
+
+            // If we missed a packet, try to recover from RedundantPayload
+            if (actualSeq > expectedSeq)
+            {
+                if (actualSeq == expectedSeq + 1 && packet.RedundantPayload != null)
+                {
+                    LogicPoint recoveryOrigin = _points.Count > 0 ? _points[_points.Count - 1] : new LogicPoint(0, 0, 0);
+                    var recoveredPoints = StrokeDeltaCompressor.Decompress(recoveryOrigin, packet.RedundantPayload);
+                    if (recoveredPoints.Count > 0)
+                    {
+                        ProcessPointsBatch(recoveredPoints);
+                        _lastReceivedSequenceId = actualSeq - 1; 
+                    }
+                }
+            }
             
-            // Wait, DeltaCompressor needs an origin.
-            // If we have points, origin is _points.Last().
-            // If we don't, the packet payload MUST start with an absolute point (or 0,0 relative to 0,0).
-            
+            if (actualSeq <= _lastReceivedSequenceId) return;
+
             LogicPoint origin = _points.Count > 0 ? _points[_points.Count - 1] : new LogicPoint(0, 0, 0);
-            
             var newPoints = StrokeDeltaCompressor.Decompress(origin, packet.Payload);
             
-            if (newPoints.Count == 0) return;
+            if (newPoints.Count > 0)
+            {
+                ProcessPointsBatch(newPoints);
+                _lastReceivedSequenceId = actualSeq;
+            }
+        }
+
+        private void ProcessPointsBatch(List<LogicPoint> newPoints)
+        {
+            // Update Velocity for Prediction
+            if (_points.Count > 0)
+            {
+                LogicPoint prev = _points[_points.Count - 1];
+                LogicPoint curr = newPoints[newPoints.Count - 1];
+                
+                float dt = Time.time - _lastPacketTime;
+                if (dt > 0.001f)
+                {
+                    Vector2 displacement = new Vector2(curr.X - prev.X, curr.Y - prev.Y);
+                    // Simple EMA for smoother velocity? Or instant?
+                    // Let's use instant for responsiveness, or slight smoothing.
+                    Vector2 instantVel = displacement / dt;
+                    _velocity = Vector2.Lerp(_velocity, instantVel, 0.5f);
+                }
+            }
+            
+            _lastPacketTime = Time.time;
 
             // Add to buffer
             _points.AddRange(newPoints);
-            _lastSequenceId = packet.Sequence;
+        }
 
-            // Render to Ghost Layer immediately
-            // Optimization: Only draw the new segment
-            // We need to connect from the last rendered point to the new points.
+        public void Update(float deltaTime)
+        {
+            if (!IsActive) return;
+
+            // Prepare points to draw
+            List<LogicPoint> pointsToDraw = _points;
+
+            // Extrapolation Logic
+            float timeSincePacket = Time.time - _lastPacketTime;
             
-            // If this is the very first batch, just draw them.
-            // If subsequent batch, we need to include the last point of previous batch to ensure continuity.
-            
-            if (_hasRenderedFirstPoint && _points.Count > newPoints.Count)
+            if (timeSincePacket > PREDICTION_THRESHOLD && _points.Count > 0)
             {
-                // Prepend the last known point to the draw list for continuity
-                // But DrawPoints expects a list. 
-                // Let's create a temp list for rendering?
-                // Or just rely on the fact that IStrokeRenderer implementations usually handle line strips?
-                // CanvasRenderer.DrawPoints handles interpolation.
-                // If we pass [A, B, C], it draws A->B->C.
-                // Next time we pass [C, D, E], it draws C->D->E.
-                // We need to pass C again.
+                // Limit prediction
+                float predictionTime = Mathf.Min(timeSincePacket - PREDICTION_THRESHOLD, MAX_PREDICTION_TIME);
                 
-                var drawBatch = new List<LogicPoint>(newPoints.Count + 1);
-                drawBatch.Add(_lastRenderedPoint);
-                drawBatch.AddRange(newPoints);
-                _ghostRenderer.DrawPoints(drawBatch);
-            }
-            else
-            {
-                _ghostRenderer.DrawPoints(newPoints);
+                if (predictionTime > 0 && _velocity.sqrMagnitude > 1f)
+                {
+                    LogicPoint lastPoint = _points[_points.Count - 1];
+                    Vector2 predictedPos = new Vector2(lastPoint.X, lastPoint.Y) + _velocity * predictionTime;
+                    
+                    // Clamp to valid range (0-65535)
+                    predictedPos.x = Mathf.Clamp(predictedPos.x, 0, 65535);
+                    predictedPos.y = Mathf.Clamp(predictedPos.y, 0, 65535);
+                    
+                    LogicPoint predictedPoint = new LogicPoint((ushort)predictedPos.x, (ushort)predictedPos.y, lastPoint.Pressure);
+                    
+                    // Create a temporary list with predicted point
+                    // Optimization: Avoid new List every frame? 
+                    // But we can't modify _points.
+                    // Let's create a new list for now (MVP).
+                    pointsToDraw = new List<LogicPoint>(_points.Count + 1);
+                    pointsToDraw.AddRange(_points);
+                    pointsToDraw.Add(predictedPoint);
+                }
             }
 
-            _lastRenderedPoint = newPoints[newPoints.Count - 1];
-            _hasRenderedFirstPoint = true;
+            // Draw
+            // Need Color and Size from Metadata
+            Color color = Color.black; // Default
+            float size = 10f;
+            bool isEraser = false;
+
+            if (Metadata.StrokeId != 0) // Valid metadata
+            {
+                // Metadata.Color is uint. Need conversion helper.
+                // Assuming Utils exist or manual conversion.
+                // RGBA packed?
+                // Let's assume DrawingConstants or similar has ColorFromUInt.
+                // Or just use default for now if helper missing.
+                // Actually DrawingNetworkService had ColorToUInt.
+                // We'll interpret it here.
+                color = DrawingNetworkService.UIntToColor(Metadata.Color);
+                size = Metadata.Size;
+                isEraser = Metadata.BrushId == 1;
+            }
+
+            _ghostRenderer.DrawGhostStroke(pointsToDraw, size, color, isEraser);
         }
 
         public List<LogicPoint> GetFullPoints()

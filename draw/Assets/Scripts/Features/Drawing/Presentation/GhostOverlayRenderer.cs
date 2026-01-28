@@ -11,8 +11,9 @@ namespace Features.Drawing.Presentation
     /// <summary>
     /// Renders transient "Ghost" strokes from remote users.
     /// Overlays on top of the main canvas.
+    /// Uses Retained Mode (Clear & Redraw per frame) to support Extrapolation/Prediction.
     /// </summary>
-    public class GhostOverlayRenderer : MonoBehaviour, IStrokeRenderer
+    public class GhostOverlayRenderer : MonoBehaviour
     {
         [Header("References")]
         [SerializeField] private CanvasRenderer _mainRenderer;
@@ -34,12 +35,8 @@ namespace Features.Drawing.Presentation
         private List<StampData> _stampBuffer = new List<StampData>(1024);
 
         // Brush State
-        private float _baseBrushSize = 10f;
-        private float _currentSize = 10f;
-        private float _sizeMultiplier = 1f;
-        private Color _brushColor = Color.black;
-        private bool _isEraser = false;
         private float _brushOpacity = 1f;
+        // _isEraser, _brushColor, _baseBrushSize removed as they are passed per-call in DrawGhostStroke
 
         private void Awake()
         {
@@ -131,8 +128,8 @@ namespace Features.Drawing.Presentation
             if (_brushMaterial != null) _brushMaterial.mainTexture = tex;
 
             _brushOpacity = strategy.Opacity;
-            _sizeMultiplier = strategy.SizeMultiplier;
-            _currentSize = _baseBrushSize * _sizeMultiplier;
+            // _sizeMultiplier = strategy.SizeMultiplier; // Removed, applied on input size if needed, but here we just take raw size from network
+            // _currentSize = _baseBrushSize * _sizeMultiplier; // Removed
 
             _stampGenerator.RotationMode = strategy.RotationMode;
             _stampGenerator.SpacingRatio = strategy.SpacingRatio;
@@ -150,55 +147,68 @@ namespace Features.Drawing.Presentation
             }
         }
 
-        public void SetBrushSize(float size)
+        // Removed SetBrushSize/SetBrushColor as they are stateful and replaced by DrawGhostStroke arguments
+        // public void SetBrushSize(float size) { ... }
+        // public void SetBrushColor(Color color) { ... }
+
+        // --- Retained Mode Support (For Extrapolation) ---
+
+        public void BeginFrame()
         {
-            _baseBrushSize = size;
-            _currentSize = _baseBrushSize * _sizeMultiplier;
+            if (_layoutController == null || _layoutController.ActiveRT == null) return;
+            
+            // Clear the Active RT completely
+            _layoutController.ClearActiveRT();
         }
 
-        public void SetBrushColor(Color color)
-        {
-            _brushColor = color;
-            _isEraser = false;
-        }
-
-        public void SetEraser(bool isEraser)
-        {
-            _isEraser = isEraser;
-        }
-
-        public void DrawPoints(IEnumerable<LogicPoint> points)
+        public void DrawGhostStroke(IEnumerable<LogicPoint> points, float size, Color color, bool isEraser)
         {
             if (_layoutController == null || _layoutController.ActiveRT == null) return;
 
+            // Reset generator state for this fresh stroke draw
+            _stampGenerator.Reset();
+            
             _cmd.Clear();
             _cmd.SetRenderTarget(_layoutController.ActiveRT);
 
-            // Special Ghost Eraser Handling
-            if (_isEraser)
+            // Configure Material
+            if (isEraser)
             {
-                // Draw Red Trail instead of erasing
                 _brushMaterial.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
                 _brushMaterial.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
                 _brushMaterial.SetInt("_BlendOp", (int)BlendOp.Add);
-                
                 _props.SetColor("_Color", _eraserTrailColor);
             }
             else
             {
-                Color drawColor = _brushColor;
-                drawColor.a *= _brushOpacity;
+                Color drawColor = color;
+                drawColor.a *= _brushOpacity; // Use current opacity setting or pass it in? 
+                // For simplicity, we use the class state _brushOpacity (configured via ConfigureBrush)
+                // OR we should pass opacity in arguments. 
+                // Let's stick to using configured state, assuming ConfigureBrush was called for this stroke context.
                 _props.SetColor("_Color", drawColor);
+            }
+            
+            // Fix: Ensure standard blend mode for non-eraser
+            if (!isEraser)
+            {
+                 _brushMaterial.SetInt("_SrcBlend", (int)BlendMode.One); // Premultiplied or standard? 
+                 // CanvasRenderer uses One OneMinusSrcAlpha usually.
+                 // Let's use standard alpha blend for ghost
+                 _brushMaterial.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
+                 _brushMaterial.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
+                 _brushMaterial.SetInt("_BlendOp", (int)BlendOp.Add);
             }
 
             _cmd.SetViewMatrix(Matrix4x4.identity);
             _cmd.SetProjectionMatrix(Matrix4x4.Ortho(0, _layoutController.Resolution.x, 0, _layoutController.Resolution.y, -1, 1));
 
             // Generate stamps
-            _stampGenerator.ProcessPoints(points, _currentSize, _stampBuffer);
+            _stampGenerator.ProcessPoints(points, size, _stampBuffer);
 
             if (_stampBuffer.Count > 0)
             {
+                // Optimization: DrawMeshInstanced if supported, but for now simple DrawMesh loop
                 foreach (var stamp in _stampBuffer)
                 {
                     Matrix4x4 matrix = Matrix4x4.TRS(
@@ -218,14 +228,10 @@ namespace Features.Drawing.Presentation
             _stampGenerator.Reset();
         }
 
-        public void ClearCanvas()
-        {
-            _layoutController.ClearActiveRT();
-            _stampGenerator.Reset();
-        }
-
-        public void SetBakingMode(bool enabled) { /* No-op for ghost */ }
-        public void RestoreFromBackBuffer() { /* No-op for ghost */ }
+        // Unused legacy methods from IStrokeRenderer
+        // public void ClearCanvas() { ... }
+        // public void SetBakingMode(bool enabled) { ... }
+        // public void RestoreFromBackBuffer() { ... }
 
         // --- Helpers ---
 

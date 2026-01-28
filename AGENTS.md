@@ -78,7 +78,7 @@ graph TD
 1.  **Presentation (Unity)**:
     *   **CanvasRenderer**: Handles `CommandBuffer`, `Mesh`, `Material`. **Purely visual**.
     *   **GhostOverlayRenderer**: Handles transient rendering of remote strokes (Red trail for eraser).
-    *   **Rules**: Never put business logic here. Must implement `IStrokeRenderer`.
+    *   **Rules**: Never put business logic here. Uses **Retained Mode** (Redraw per frame) to support prediction.
 2.  **Application (App)**:
     *   **DrawingAppService**: The "Brain". Coordinates Input -> Logic -> Rendering -> Network.
     *   **Rules**: Manages `TraceContext`. Handles Dependency Injection.
@@ -118,7 +118,10 @@ graph TD
 *   **Protocol**: Hybrid Sync (Ghost Layer + Commit).
 *   **Key Logic**:
     *   **Delta Compression**: Uses `StrokeDeltaCompressor` (VarInt + Relative) to minimize bandwidth.
-    *   **Ghost Rendering**: Renders incoming points immediately to `GhostOverlayRenderer`.
+    *   **Adaptive Batching**: Aggregates points (10 count or 33ms) to balance overhead and latency.
+    *   **Redundancy**: Includes previous batch data in packets to recover from packet loss (1-packet lookback).
+    *   **Prediction**: Uses Client-Side Extrapolation (Velocity-based) to mask network jitter in the Ghost Layer.
+    *   **Ghost Rendering**: Drives `GhostOverlayRenderer` in a retained loop.
     *   **Commit**: On `EndStroke`, reconstructs the full `StrokeEntity` and commits it to `DrawingAppService`.
 
 ## 5. Development Guidelines for AI Agents
