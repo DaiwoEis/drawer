@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using System.Runtime.InteropServices;
 using Features.Drawing.Domain.ValueObject;
 using Common.Constants;
 using System.Linq;
@@ -25,7 +26,15 @@ namespace Features.Drawing.Presentation
         private float _scaleY = 1f;
         private float _sizeScale = 1f;
 
+        // Pooled Buffers (Zero-GC)
+        private GpuLogicPoint[] _gpuPointBuffer;
+        private float[] _distanceBuffer;
+        private int[] _argsBufferData = new int[1];
+        private StampData[] _stampReadbackBuffer;
+        private List<LogicPoint> _pointListBuffer = new List<LogicPoint>(1024);
+
         // Struct matching HLSL
+        [StructLayout(LayoutKind.Sequential)]
         private struct GpuLogicPoint
         {
             public float x;
@@ -63,13 +72,29 @@ namespace Features.Drawing.Presentation
             if (outputBuffer == null) return;
             outputBuffer.Clear();
 
-            var pointList = points as List<LogicPoint> ?? points.ToList();
+            // Avoid ToList() allocation if possible
+            IList<LogicPoint> pointList = points as IList<LogicPoint>;
+            if (pointList == null)
+            {
+                _pointListBuffer.Clear();
+                _pointListBuffer.AddRange(points);
+                pointList = _pointListBuffer;
+            }
+
             int count = pointList.Count;
             if (count < 2) return;
 
             // 1. Prepare Data
-            var gpuPoints = new GpuLogicPoint[count];
-            var distances = new float[count];
+            if (_gpuPointBuffer == null || _gpuPointBuffer.Length < count)
+            {
+                // Resize buffer (power of 2 or exact fit)
+                int newSize = Mathf.NextPowerOfTwo(count);
+                _gpuPointBuffer = new GpuLogicPoint[newSize];
+                _distanceBuffer = new float[newSize];
+            }
+
+            var gpuPoints = _gpuPointBuffer;
+            var distances = _distanceBuffer;
             float totalDist = 0f;
 
             // Pre-calculate distances (Prefix Sum on CPU for now)
@@ -119,11 +144,13 @@ namespace Features.Drawing.Presentation
                 _distBuffer = new ComputeBuffer(count, sizeof(float));
             }
 
-            _inputBuffer.SetData(gpuPoints);
-            _distBuffer.SetData(distances);
+            // Only set valid data range
+            _inputBuffer.SetData(gpuPoints, 0, 0, count);
+            _distBuffer.SetData(distances, 0, 0, count);
 
             // Estimate max output size
-            float spacing = Mathf.Max(1.0f, brushSize * SpacingRatio); // Rough estimate
+            // FIX: Include _sizeScale in spacing calculation to match Shader logic
+            float spacing = Mathf.Max(1.0f, brushSize * _sizeScale * SpacingRatio);
             int estimatedStamps = Mathf.CeilToInt(totalDist / spacing) + count * 2; // + margin
             
             if (_outputBuffer == null || _outputBuffer.count < estimatedStamps)
@@ -139,7 +166,7 @@ namespace Features.Drawing.Presentation
             _shader.SetBuffer(_kernelIndex, "PathDistances", _distBuffer);
             _shader.SetBuffer(_kernelIndex, "OutputStamps", _outputBuffer);
             
-            _shader.SetFloat("Spacing", Mathf.Max(1.0f, brushSize * _sizeScale * SpacingRatio)); // Logic from original
+            _shader.SetFloat("Spacing", spacing); // Use pre-calculated consistent spacing
             _shader.SetFloat("SizeScale", _sizeScale);
             _shader.SetFloat("BrushSize", brushSize);
             _shader.SetFloat("ScaleX", _scaleX);
@@ -152,16 +179,33 @@ namespace Features.Drawing.Presentation
 
             // 4. Readback
             // Get count
-            int[] args = new int[] { 0 };
             ComputeBuffer.CopyCount(_outputBuffer, _argsBuffer, 0);
-            _argsBuffer.GetData(args);
-            int stampCount = args[0];
+            _argsBuffer.GetData(_argsBufferData);
+            int stampCount = _argsBufferData[0];
 
             if (stampCount > 0)
             {
-                StampData[] result = new StampData[stampCount];
-                _outputBuffer.GetData(result);
-                outputBuffer.AddRange(result);
+                if (_stampReadbackBuffer == null || _stampReadbackBuffer.Length < stampCount)
+                {
+                    int newSize = Mathf.NextPowerOfTwo(stampCount);
+                    _stampReadbackBuffer = new StampData[newSize];
+                }
+                
+                _outputBuffer.GetData(_stampReadbackBuffer, 0, 0, stampCount);
+                
+                // Avoid AddRange(array) which might iterate fully or copy inefficiently? 
+                // List.AddRange is usually optimized for arrays.
+                // But we are reading from a larger buffer.
+                
+                if (outputBuffer.Capacity < outputBuffer.Count + stampCount)
+                {
+                    outputBuffer.Capacity = outputBuffer.Count + stampCount;
+                }
+                
+                for (int i = 0; i < stampCount; i++)
+                {
+                    outputBuffer.Add(_stampReadbackBuffer[i]);
+                }
             }
         }
 

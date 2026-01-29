@@ -1,7 +1,9 @@
 using UnityEngine;
+using System.Runtime.InteropServices;
 
 namespace Features.Drawing.Presentation
 {
+    [StructLayout(LayoutKind.Sequential)]
     public struct StampData
     {
         public Vector2 Position;
