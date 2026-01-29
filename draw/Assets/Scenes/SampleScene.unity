@@ -187,7 +187,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _ghostRenderer: {fileID: 126956212}
+  _usePrediction: 0
   _maxActiveRemoteStrokes: 32
+  _useBuildDefaults: 1
   _strictPacketValidation: 1
   _rejectUnknownBrushId: 1
 --- !u!114 &126956214

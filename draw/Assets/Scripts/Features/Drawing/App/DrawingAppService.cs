@@ -75,6 +75,10 @@ namespace Features.Drawing.App
 
         private void Awake()
         {
+            // Performance: Limit frame rate to 60 FPS to save battery/reduce heat
+            Application.targetFrameRate = 60;
+            QualitySettings.vSyncCount = 0;
+
             // 1. Resolve Renderer (Priority: Inspector -> FindObjectOfType)
             if (_concreteRenderer == null) 
                 _concreteRenderer = FindObjectOfType<Features.Drawing.Presentation.CanvasRenderer>();
