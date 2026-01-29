@@ -468,18 +468,48 @@ namespace Features.Drawing.Presentation
                 // if (count > 1) Debug.LogWarning("[CanvasRenderer] Zero stamps generated!");
             }
 
-            // Draw stamps
-            foreach (var stamp in _stampBuffer)
+            // Draw stamps (Instanced)
+            if (_stampBuffer.Count > 0)
             {
-                DrawStamp(stamp.Position, stamp.Size, stamp.Rotation);
+                // Ensure Instancing is enabled on material (Standard Requirement)
+                // Note: Standard shaders require this, custom shaders might too.
+                _brushMaterial.enableInstancing = true;
+
+                int batchCount = 0;
+                for (int i = 0; i < _stampBuffer.Count; i++)
+                {
+                    var stamp = _stampBuffer[i];
+                    
+                    if (batchCount >= BATCH_SIZE)
+                    {
+                        _cmd.DrawMeshInstanced(_quadMesh, 0, _brushMaterial, 0, _matrices, batchCount, _props);
+                        batchCount = 0;
+                    }
+
+                    _matrices[batchCount] = Matrix4x4.TRS(
+                        new Vector3(stamp.Position.x, stamp.Position.y, 0),
+                        Quaternion.Euler(0, 0, stamp.Rotation),
+                        new Vector3(stamp.Size, stamp.Size, 1)
+                    );
+                    batchCount++;
+                }
+
+                if (batchCount > 0)
+                {
+                    _cmd.DrawMeshInstanced(_quadMesh, 0, _brushMaterial, 0, _matrices, batchCount, _props);
+                }
             }
 
             Graphics.ExecuteCommandBuffer(_cmd);
         }
 
+        // Cache for batching (optimization)
+        private Matrix4x4[] _matrices = new Matrix4x4[BATCH_SIZE];
+
         private void DrawStamp(Vector2 pos, float size, float angle)
         {
-            Matrix4x4 matrix = Matrix4x4.TRS(
+            // Fallback / Legacy single draw
+             Matrix4x4 matrix = Matrix4x4.TRS(
                 new Vector3(pos.x, pos.y, 0), 
                 Quaternion.Euler(0, 0, angle),
                 new Vector3(size, size, 1)

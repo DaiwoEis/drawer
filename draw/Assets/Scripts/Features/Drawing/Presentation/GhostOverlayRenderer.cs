@@ -33,6 +33,8 @@ namespace Features.Drawing.Presentation
         
         private StrokeStampGenerator _stampGenerator = new StrokeStampGenerator();
         private List<StampData> _stampBuffer = new List<StampData>(1024);
+        private const int BATCH_SIZE = 1023;
+        private Matrix4x4[] _matrices = new Matrix4x4[BATCH_SIZE];
 
         // Brush State
         private float _brushOpacity = 1f;
@@ -95,6 +97,13 @@ namespace Features.Drawing.Presentation
             
             // Sync generator scale
             _stampGenerator.SetCanvasResolution(resolution);
+        }
+
+        public Vector2Int Resolution => _layoutController != null ? _layoutController.Resolution : Vector2Int.zero;
+
+        public float GetBrushSizeScale()
+        {
+            return _layoutController != null ? _layoutController.GetBrushSizeScale() : 1f;
         }
 
         private void InitializeGraphics()
@@ -175,10 +184,35 @@ namespace Features.Drawing.Presentation
             // Reset generator state for this fresh stroke draw
             _stampGenerator.Reset();
             
+            // Generate stamps
+            _stampGenerator.ProcessPoints(points, size, _stampBuffer);
+            DrawStampsInternal(_stampBuffer, color, isEraser, strategy);
+            _stampBuffer.Clear();
+        }
+
+        public void DrawGhostStamps(List<StampData> stamps, Color color, bool isEraser, BrushStrategy strategy)
+        {
+            if (_layoutController == null || _layoutController.ActiveRT == null) return;
+            DrawStampsInternal(stamps, color, isEraser, strategy);
+        }
+
+        public void EndStroke()
+        {
+            _stampGenerator.Reset();
+        }
+
+        private void DrawStampsInternal(List<StampData> stamps, Color color, bool isEraser, BrushStrategy strategy)
+        {
+            if (stamps == null || stamps.Count == 0) return;
+
+            if (strategy != null)
+            {
+                ConfigureBrush(strategy);
+            }
+
             _cmd.Clear();
             _cmd.SetRenderTarget(_layoutController.ActiveRT);
 
-            // Configure Material
             if (isEraser)
             {
                 _brushMaterial.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
@@ -189,55 +223,40 @@ namespace Features.Drawing.Presentation
             else
             {
                 Color drawColor = color;
-                drawColor.a *= _brushOpacity; // Use opacity from strategy (configured via ConfigureBrush)
+                drawColor.a *= _brushOpacity;
                 _props.SetColor("_Color", drawColor);
-                
-                // Use the blend modes from the strategy!
-                // If strategy is null, we might be in trouble, but we have defaults in _brushMaterial if initialized?
-                // Actually ConfigureBrush sets the material properties.
-                // We just need to make sure we don't override them here with hardcoded values unless necessary.
-                
-                // NOTE: CanvasRenderer uses the strategy's blend modes.
-                // We should do the same.
-                // ConfigureBrush already sets _BlendOp, _SrcBlend, _DstBlend on the material.
-                // BUT: We are rendering to a transparent RT (Ghost Layer) which is then composited over the Main Canvas.
-                // If we use "One OneMinusSrcAlpha" (Premultiplied) here, it might double-multiply when composited?
-                // The Ghost Layer is displayed via a RawImage.
-                // If the RawImage uses UI/Default (Alpha Blending), we need the RT content to be standard alpha or premultiplied matching the UI shader.
-                
-                // Let's assume standard Alpha Blending for now to match local strokes visually *on the overlay*.
-                // BUT: If the brush is "Additive", we want it to add to the ghost layer.
-                
-                // For now, let's TRUST the strategy's blend modes, because ConfigureBrush sets them.
-                // The only override is for Eraser (Red Trail).
             }
 
             _cmd.SetViewMatrix(Matrix4x4.identity);
             _cmd.SetProjectionMatrix(Matrix4x4.Ortho(0, _layoutController.Resolution.x, 0, _layoutController.Resolution.y, -1, 1));
 
-            // Generate stamps
-            _stampGenerator.ProcessPoints(points, size, _stampBuffer);
+            _brushMaterial.enableInstancing = true;
 
-            if (_stampBuffer.Count > 0)
+            int batchCount = 0;
+            for (int i = 0; i < stamps.Count; i++)
             {
-                // Optimization: DrawMeshInstanced if supported, but for now simple DrawMesh loop
-                foreach (var stamp in _stampBuffer)
-                {
-                    Matrix4x4 matrix = Matrix4x4.TRS(
-                        new Vector3(stamp.Position.x, stamp.Position.y, 0),
-                        Quaternion.Euler(0, 0, stamp.Rotation),
-                        new Vector3(stamp.Size, stamp.Size, 1)
-                    );
-                    _cmd.DrawMesh(_quadMesh, matrix, _brushMaterial, 0, 0, _props);
-                }
-                
-                Graphics.ExecuteCommandBuffer(_cmd);
-            }
-        }
+                var stamp = stamps[i];
 
-        public void EndStroke()
-        {
-            _stampGenerator.Reset();
+                if (batchCount >= BATCH_SIZE)
+                {
+                    _cmd.DrawMeshInstanced(_quadMesh, 0, _brushMaterial, 0, _matrices, batchCount, _props);
+                    batchCount = 0;
+                }
+
+                _matrices[batchCount] = Matrix4x4.TRS(
+                    new Vector3(stamp.Position.x, stamp.Position.y, 0),
+                    Quaternion.Euler(0, 0, stamp.Rotation),
+                    new Vector3(stamp.Size, stamp.Size, 1)
+                );
+                batchCount++;
+            }
+
+            if (batchCount > 0)
+            {
+                _cmd.DrawMeshInstanced(_quadMesh, 0, _brushMaterial, 0, _matrices, batchCount, _props);
+            }
+
+            Graphics.ExecuteCommandBuffer(_cmd);
         }
 
         // Unused legacy methods from IStrokeRenderer

@@ -27,6 +27,7 @@ Shader "Drawing/BrushStamp"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            #pragma multi_compile_instancing
             
             #include "UnityCG.cginc"
 
@@ -35,6 +36,7 @@ Shader "Drawing/BrushStamp"
                 float4 vertex : POSITION;
                 float2 uv : TEXCOORD0;
                 fixed4 color : COLOR; // Vertex color (from C# SetColors)
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
             struct v2f
@@ -42,6 +44,7 @@ Shader "Drawing/BrushStamp"
                 float2 uv : TEXCOORD0;
                 float4 vertex : SV_POSITION;
                 fixed4 color : COLOR;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
             sampler2D _MainTex;
@@ -53,6 +56,9 @@ Shader "Drawing/BrushStamp"
             v2f vert (appdata v)
             {
                 v2f o;
+                UNITY_SETUP_INSTANCE_ID(v);
+                UNITY_TRANSFER_INSTANCE_ID(v, o);
+
                 o.vertex = UnityObjectToClipPos(v.vertex);
                 o.uv = TRANSFORM_TEX(v.uv, _MainTex);
                 // Combine material color and vertex color (alpha/pressure)
@@ -62,6 +68,7 @@ Shader "Drawing/BrushStamp"
 
             fixed4 frag (v2f i) : SV_Target
             {
+                UNITY_SETUP_INSTANCE_ID(i);
                 fixed4 texCol = tex2D(_MainTex, i.uv);
                 
                 // Final alpha = TextureAlpha * VertexAlpha * TintAlpha

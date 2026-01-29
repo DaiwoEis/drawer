@@ -19,6 +19,9 @@ namespace Features.Drawing.Service.Network
         // Decoupled: Removed direct reference to DrawingAppService
         [SerializeField] private Features.Drawing.Presentation.GhostOverlayRenderer _ghostRenderer;
 
+        [Header("Ghost Settings")]
+        [SerializeField] private bool _usePrediction = false;
+
         [Header("Security")]
         [SerializeField] private int _maxActiveRemoteStrokes = 32;
         [SerializeField] private bool _useBuildDefaults = true;
@@ -241,19 +244,20 @@ namespace Features.Drawing.Service.Network
                 return;
             }
 
-            if (_activeRemoteStrokes.Count > 0)
+            if (_usePrediction)
             {
-                // Prediction & Retained Rendering Loop
                 _ghostRenderer.BeginFrame();
-                
-                foreach (var kvp in _activeRemoteStrokes)
+                if (_activeRemoteStrokes.Count > 0)
                 {
-                    kvp.Value.Update(Time.deltaTime);
+                    foreach (var kvp in _activeRemoteStrokes)
+                    {
+                        kvp.Value.Update(Time.deltaTime);
+                    }
                 }
-            }
-            else
-            {
-                 _ghostRenderer.BeginFrame();
+                else
+                {
+                    _ghostRenderer.BeginFrame();
+                }
             }
         }
 
@@ -300,8 +304,13 @@ namespace Features.Drawing.Service.Network
                 return;
             }
 
+            if (!_usePrediction && _activeRemoteStrokes.Count == 0)
+            {
+                _ghostRenderer.BeginFrame();
+            }
+
             // Setup Renderer
-            var context = new RemoteStrokeContext(packet.StrokeId, _ghostRenderer);
+            var context = new RemoteStrokeContext(packet.StrokeId, _ghostRenderer, _usePrediction);
             context.SetMetadata(packet); // Store metadata
             
             // Resolve Strategy and pass to context
@@ -359,6 +368,10 @@ namespace Features.Drawing.Service.Network
                 }
                 
                 context.ProcessUpdate(packet);
+                if (!_usePrediction)
+                {
+                    context.RenderIncremental();
+                }
 
                 ReleasePooledPacket(packet);
             }
@@ -426,6 +439,10 @@ namespace Features.Drawing.Service.Network
                 
                 // 3. Clear Ghost
                 _activeRemoteStrokes.Remove(packet.StrokeId);
+                if (!_usePrediction)
+                {
+                    RedrawActiveGhosts();
+                }
             }
         }
 
@@ -434,6 +451,10 @@ namespace Features.Drawing.Service.Network
             if (_activeRemoteStrokes.ContainsKey(packet.StrokeId))
             {
                 _activeRemoteStrokes.Remove(packet.StrokeId);
+                if (!_usePrediction)
+                {
+                    RedrawActiveGhosts();
+                }
             }
         }
 
@@ -442,6 +463,20 @@ namespace Features.Drawing.Service.Network
             if (_activeRemoteStrokes.ContainsKey(strokeId))
             {
                 _activeRemoteStrokes.Remove(strokeId);
+                if (!_usePrediction)
+                {
+                    RedrawActiveGhosts();
+                }
+            }
+        }
+
+        private void RedrawActiveGhosts()
+        {
+            if (_ghostRenderer == null) return;
+            _ghostRenderer.BeginFrame();
+            foreach (var kvp in _activeRemoteStrokes)
+            {
+                kvp.Value.RenderFull();
             }
         }
 

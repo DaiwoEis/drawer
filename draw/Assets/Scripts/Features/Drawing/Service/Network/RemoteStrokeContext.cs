@@ -24,13 +24,19 @@ namespace Features.Drawing.Service.Network
         
         // Rendering State
         private readonly GhostOverlayRenderer _ghostRenderer;
+        private readonly bool _usePrediction;
         private Features.Drawing.Domain.BrushStrategy _strategy;
         private List<LogicPoint> _predictionBuffer = new List<LogicPoint>(512);
+        private StrokeStampGenerator _incrementalStampGenerator = new StrokeStampGenerator();
+        private List<StampData> _incrementalStampBuffer = new List<StampData>(256);
+        private List<LogicPoint> _newPointsBuffer = new List<LogicPoint>(256);
+        private int _lastRenderedIndex = 0;
 
-        public RemoteStrokeContext(uint strokeId, GhostOverlayRenderer ghostRenderer)
+        public RemoteStrokeContext(uint strokeId, GhostOverlayRenderer ghostRenderer, bool usePrediction)
         {
             StrokeId = strokeId;
             _ghostRenderer = ghostRenderer;
+            _usePrediction = usePrediction;
             IsActive = true;
             _lastPacketTime = Time.time;
         }
@@ -38,12 +44,16 @@ namespace Features.Drawing.Service.Network
         public void SetStrategy(Features.Drawing.Domain.BrushStrategy strategy)
         {
             _strategy = strategy;
+            ConfigureIncrementalGenerator();
         }
 
         public void SetMetadata(BeginStrokePacket metadata)
         {
             Metadata = metadata;
             // Debug.Log($"[RemoteStrokeContext] SetMetadata: ID={Metadata.StrokeId}, BrushId={Metadata.BrushId}, Size={Metadata.Size}");
+            _lastRenderedIndex = 0;
+            _incrementalStampGenerator.Reset();
+            ConfigureIncrementalGenerator();
         }
 
         // Prediction State
@@ -105,6 +115,7 @@ namespace Features.Drawing.Service.Network
         {
             if (!IsActive) return;
             if (_ghostRenderer == null) return;
+            if (!_usePrediction) return;
 
             // Prepare points to draw
             List<LogicPoint> pointsToDraw = _points;
@@ -159,6 +170,57 @@ namespace Features.Drawing.Service.Network
             _ghostRenderer.DrawGhostStroke(pointsToDraw, size, color, isEraser, _strategy);
         }
 
+        public void RenderIncremental()
+        {
+            if (!IsActive) return;
+            if (_ghostRenderer == null) return;
+            if (_usePrediction) return;
+
+            if (_points.Count <= _lastRenderedIndex) return;
+
+            Color color = Color.black;
+            float size = 10f;
+            bool isEraser = false;
+
+            if (Metadata.StrokeId != 0)
+            {
+                color = DrawingNetworkService.UIntToColor(Metadata.Color);
+                size = Metadata.Size;
+                isEraser = Metadata.BrushId == Common.Constants.DrawingConstants.ERASER_BRUSH_ID;
+            }
+
+            _newPointsBuffer.Clear();
+            for (int i = _lastRenderedIndex; i < _points.Count; i++)
+            {
+                _newPointsBuffer.Add(_points[i]);
+            }
+
+            UpdateIncrementalGeneratorScale();
+            _incrementalStampGenerator.ProcessPoints(_newPointsBuffer, size, _incrementalStampBuffer);
+            _ghostRenderer.DrawGhostStamps(_incrementalStampBuffer, color, isEraser, _strategy);
+            _incrementalStampBuffer.Clear();
+            _lastRenderedIndex = _points.Count;
+        }
+
+        public void RenderFull()
+        {
+            if (!IsActive) return;
+            if (_ghostRenderer == null) return;
+
+            Color color = Color.black;
+            float size = 10f;
+            bool isEraser = false;
+
+            if (Metadata.StrokeId != 0)
+            {
+                color = DrawingNetworkService.UIntToColor(Metadata.Color);
+                size = Metadata.Size;
+                isEraser = Metadata.BrushId == Common.Constants.DrawingConstants.ERASER_BRUSH_ID;
+            }
+
+            _ghostRenderer.DrawGhostStroke(_points, size, color, isEraser, _strategy);
+        }
+
         public List<LogicPoint> GetFullPoints()
         {
             return _points;
@@ -167,6 +229,21 @@ namespace Features.Drawing.Service.Network
         public void Finish()
         {
             IsActive = false;
+        }
+
+        private void ConfigureIncrementalGenerator()
+        {
+            if (_strategy == null) return;
+            _incrementalStampGenerator.RotationMode = _strategy.RotationMode;
+            _incrementalStampGenerator.SpacingRatio = _strategy.SpacingRatio;
+            _incrementalStampGenerator.AngleJitter = _strategy.AngleJitter;
+        }
+
+        private void UpdateIncrementalGeneratorScale()
+        {
+            if (_ghostRenderer == null) return;
+            _incrementalStampGenerator.SetCanvasResolution(_ghostRenderer.Resolution);
+            _incrementalStampGenerator.SetSizeScale(_ghostRenderer.GetBrushSizeScale());
         }
     }
 }
