@@ -45,6 +45,10 @@ namespace Features.Drawing.Service.Network
         private ushort _currentSequence;
         private LogicPoint _lastSentPoint;
         private float _lastSendTime; // For adaptive batching
+        private float _currentBrushSize = 10f;
+        private LogicPoint _lastSpeedPoint;
+        private float _lastSpeedTime;
+        private bool _hasLastSpeedPoint;
         private byte[] _redundantBuffer = new byte[4096];
         private int _redundantLength;
 
@@ -104,6 +108,8 @@ namespace Features.Drawing.Service.Network
             _lastSentPoint = default; // Will be set on first point add
             _lastSendTime = Time.time;
             _redundantLength = 0;
+            _currentBrushSize = size;
+            _hasLastSpeedPoint = false;
 
             // Construct Begin Packet
             ushort resolvedBrushId = isEraser
@@ -135,10 +141,32 @@ namespace Features.Drawing.Service.Network
 
             _pendingLocalPoints.Add(point);
 
-            // Adaptive Batching:
-            // Send if we have enough points OR if enough time has passed (e.g. 33ms = 30Hz)
-            bool timeThresholdMet = (Time.time - _lastSendTime) >= 0.033f;
-            bool countThresholdMet = _pendingLocalPoints.Count >= 10;
+            float now = Time.time;
+            float speed = 0f;
+            if (_hasLastSpeedPoint)
+            {
+                float dt = now - _lastSpeedTime;
+                if (dt > 0.0001f)
+                {
+                    float dist = Mathf.Sqrt(LogicPoint.SqrDistance(_lastSpeedPoint, point));
+                    speed = dist / dt;
+                }
+            }
+            _lastSpeedPoint = point;
+            _lastSpeedTime = now;
+            _hasLastSpeedPoint = true;
+
+            float sizeT = Mathf.InverseLerp(6f, 80f, _currentBrushSize);
+            float speedT = Mathf.InverseLerp(200f, 6000f, speed);
+
+            float timeThreshold = Mathf.Lerp(0.018f, 0.05f, sizeT);
+            timeThreshold = Mathf.Lerp(timeThreshold, 0.012f, speedT);
+            int countThreshold = Mathf.RoundToInt(Mathf.Lerp(6f, 18f, sizeT));
+            countThreshold = Mathf.RoundToInt(Mathf.Lerp(countThreshold, 4f, speedT));
+            countThreshold = Mathf.Clamp(countThreshold, 3, 24);
+
+            bool timeThresholdMet = (now - _lastSendTime) >= timeThreshold;
+            bool countThresholdMet = _pendingLocalPoints.Count >= countThreshold;
             
             // Only send if we have at least 1 point and threshold is met
             // Exception: If count is very high (buffer overflow protection), send immediately

@@ -339,6 +339,9 @@ namespace Features.Drawing.App
 
                 float speedT = Mathf.InverseLerp(MIN_SPEED_THRESHOLD, MAX_SPEED_THRESHOLD, dist);
                 float dynamicFactor = Mathf.Lerp(_inputState.CurrentStrategy.StabilizationFactor, _inputState.CurrentStrategy.StabilizationFactor * 0.2f, speedT);
+                float pressure = Mathf.Clamp01(point.GetNormalizedPressure());
+                float pressureWeight = Mathf.Lerp(1.1f, 0.7f, pressure);
+                dynamicFactor *= pressureWeight;
                 
                 float t = Mathf.Clamp01(1.0f - dynamicFactor);
                 _currentStabilizedPos = Vector2.Lerp(_currentStabilizedPos, target, t);
@@ -348,6 +351,19 @@ namespace Features.Drawing.App
             else
             {
                 _currentStabilizedPos = point.ToNormalized();
+            }
+
+            if (!_inputState.IsEraser)
+            {
+                float spacingRatio = _inputState.CurrentStrategy != null ? _inputState.CurrentStrategy.SpacingRatio : 0.15f;
+                float minPixelSpacing = _inputState.CurrentSize * spacingRatio;
+                if (minPixelSpacing < 1f) minPixelSpacing = 1f;
+                float minLogical = minPixelSpacing * _logicToWorldRatio;
+                float sqrDist = LogicPoint.SqrDistance(_lastAddedPoint, pointToAdd);
+                if (sqrDist < minLogical * minLogical)
+                {
+                    return;
+                }
             }
 
             AddPoint(pointToAdd);
@@ -791,6 +807,12 @@ namespace Features.Drawing.App
         private ushort GetBrushId(BrushStrategy strategy)
         {
             if (_inputState.IsEraser) return DrawingConstants.ERASER_BRUSH_ID;
+
+            if (strategy == null)
+            {
+                Debug.LogWarning("[DrawingAppService] Brush strategy is null. Returning UNKNOWN_BRUSH_ID.");
+                return DrawingConstants.UNKNOWN_BRUSH_ID;
+            }
             
             if (_registeredBrushes != null)
             {

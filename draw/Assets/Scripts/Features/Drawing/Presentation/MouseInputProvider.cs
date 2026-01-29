@@ -21,6 +21,7 @@ namespace Features.Drawing.Presentation
         private IInputHandler _inputHandler;
         private bool _isDrawing = false;
         private Vector2 _lastPos;
+        private const float MinPixelSpacing = 0.5f;
         private readonly List<RaycastResult> _raycastResults = new List<RaycastResult>(8);
         
         // Cache to avoid GC in Update
@@ -145,9 +146,21 @@ namespace Features.Drawing.Presentation
 
         private void ContinueStroke(Vector2 pos)
         {
-            if (Vector2.Distance(pos, _lastPos) < 0.001f) return;
+            float thresholdSqr = GetMinDistanceSqr();
+            Vector2 delta = pos - _lastPos;
+            if (delta.sqrMagnitude < thresholdSqr) return;
             _lastPos = pos;
             _inputHandler.MoveStroke(LogicPoint.FromNormalized(pos, 1.0f));
+        }
+
+        private float GetMinDistanceSqr()
+        {
+            if (_inputArea == null) return 0.001f * 0.001f;
+            Rect rect = _inputArea.rect;
+            float maxSize = Mathf.Max(rect.width, rect.height);
+            if (maxSize <= 0.001f) return 0.001f * 0.001f;
+            float normalized = MinPixelSpacing / maxSize;
+            return normalized * normalized;
         }
 
         private void EndStroke()

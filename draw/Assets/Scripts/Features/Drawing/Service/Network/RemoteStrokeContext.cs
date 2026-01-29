@@ -3,6 +3,7 @@ using UnityEngine;
 using Features.Drawing.Domain.ValueObject;
 using Features.Drawing.Domain.Network;
 using Features.Drawing.Presentation; // Added for GhostOverlayRenderer
+using Common.Constants;
 
 namespace Features.Drawing.Service.Network
 {
@@ -30,6 +31,9 @@ namespace Features.Drawing.Service.Network
         private StrokeStampGenerator _incrementalStampGenerator = new StrokeStampGenerator();
         private List<StampData> _incrementalStampBuffer = new List<StampData>(256);
         private List<LogicPoint> _newPointsBuffer = new List<LogicPoint>(256);
+        private List<LogicPoint> _spacingFilteredBuffer = new List<LogicPoint>(512);
+        private LogicPoint _lastSpacingPoint;
+        private bool _hasLastSpacingPoint;
         private int _lastRenderedIndex = 0;
 
         public RemoteStrokeContext(uint strokeId, GhostOverlayRenderer ghostRenderer, bool usePrediction)
@@ -61,6 +65,10 @@ namespace Features.Drawing.Service.Network
         private Vector2 _velocity; // Pixels (LogicUnits) per second
         private const float PREDICTION_THRESHOLD = 0.033f; // Start predicting after 33ms silence
         private const float MAX_PREDICTION_TIME = 0.100f; // Max 100ms prediction
+        private const int MAX_PREDICTION_POINTS = 512;
+        private const float MIN_PREDICTION_TIME = 0.016f;
+        private const float ADAPTIVE_SPEED_LOW = 100f;
+        private const float ADAPTIVE_SPEED_HIGH = 2000f;
 
         public void ProcessUpdate(UpdateStrokePacket packet)
         {
@@ -127,6 +135,10 @@ namespace Features.Drawing.Service.Network
             {
                 // Limit prediction
                 float predictionTime = Mathf.Min(timeSincePacket - PREDICTION_THRESHOLD, MAX_PREDICTION_TIME);
+                float speed = _velocity.magnitude;
+                float speedT = Mathf.InverseLerp(ADAPTIVE_SPEED_LOW, ADAPTIVE_SPEED_HIGH, speed);
+                float adaptiveCap = Mathf.Lerp(MAX_PREDICTION_TIME, MIN_PREDICTION_TIME, speedT);
+                if (predictionTime > adaptiveCap) predictionTime = adaptiveCap;
                 
                 if (predictionTime > 0 && _velocity.sqrMagnitude > 1f)
                 {
@@ -139,10 +151,7 @@ namespace Features.Drawing.Service.Network
                     
                     LogicPoint predictedPoint = new LogicPoint((ushort)predictedPos.x, (ushort)predictedPos.y, lastPoint.Pressure);
                     
-                    // Reuse buffer to avoid per-frame allocations
-                    _predictionBuffer.Clear();
-                    _predictionBuffer.AddRange(_points);
-                    _predictionBuffer.Add(predictedPoint);
+                    BuildPredictionBuffer(predictedPoint);
                     pointsToDraw = _predictionBuffer;
                 }
             }
@@ -167,7 +176,8 @@ namespace Features.Drawing.Service.Network
                 isEraser = Metadata.BrushId == Common.Constants.DrawingConstants.ERASER_BRUSH_ID;
             }
 
-            _ghostRenderer.DrawGhostStroke(pointsToDraw, size, color, isEraser, _strategy);
+            var filtered = FilterPointsBySpacing(pointsToDraw, size, MAX_PREDICTION_POINTS);
+            _ghostRenderer.DrawGhostStroke(filtered, size, color, isEraser, _strategy);
         }
 
         public void RenderIncremental()
@@ -190,15 +200,42 @@ namespace Features.Drawing.Service.Network
             }
 
             _newPointsBuffer.Clear();
-            for (int i = _lastRenderedIndex; i < _points.Count; i++)
+            int startIndex = _lastRenderedIndex;
+
+            if (!_hasLastSpacingPoint)
             {
-                _newPointsBuffer.Add(_points[i]);
+                if (_lastRenderedIndex > 0 && _lastRenderedIndex - 1 < _points.Count)
+                {
+                    _lastSpacingPoint = _points[_lastRenderedIndex - 1];
+                    _hasLastSpacingPoint = true;
+                }
+                else if (_points.Count > 0)
+                {
+                    LogicPoint first = _points[0];
+                    _newPointsBuffer.Add(first);
+                    _lastSpacingPoint = first;
+                    _hasLastSpacingPoint = true;
+                    startIndex = 1;
+                }
+            }
+
+            for (int i = startIndex; i < _points.Count; i++)
+            {
+                LogicPoint p = _points[i];
+                if (ShouldKeepBySpacing(p, size))
+                {
+                    _newPointsBuffer.Add(p);
+                    _lastSpacingPoint = p;
+                }
             }
 
             UpdateIncrementalGeneratorScale();
-            _incrementalStampGenerator.ProcessPoints(_newPointsBuffer, size, _incrementalStampBuffer);
-            _ghostRenderer.DrawGhostStamps(_incrementalStampBuffer, color, isEraser, _strategy);
-            _incrementalStampBuffer.Clear();
+            if (_newPointsBuffer.Count > 0)
+            {
+                _incrementalStampGenerator.ProcessPoints(_newPointsBuffer, size, _incrementalStampBuffer);
+                _ghostRenderer.DrawGhostStamps(_incrementalStampBuffer, color, isEraser, _strategy);
+                _incrementalStampBuffer.Clear();
+            }
             _lastRenderedIndex = _points.Count;
         }
 
@@ -218,7 +255,8 @@ namespace Features.Drawing.Service.Network
                 isEraser = Metadata.BrushId == Common.Constants.DrawingConstants.ERASER_BRUSH_ID;
             }
 
-            _ghostRenderer.DrawGhostStroke(_points, size, color, isEraser, _strategy);
+            var filtered = FilterPointsBySpacing(_points, size, 0);
+            _ghostRenderer.DrawGhostStroke(filtered, size, color, isEraser, _strategy);
         }
 
         public List<LogicPoint> GetFullPoints()
@@ -237,6 +275,83 @@ namespace Features.Drawing.Service.Network
             _incrementalStampGenerator.RotationMode = _strategy.RotationMode;
             _incrementalStampGenerator.SpacingRatio = _strategy.SpacingRatio;
             _incrementalStampGenerator.AngleJitter = _strategy.AngleJitter;
+        }
+
+        private List<LogicPoint> FilterPointsBySpacing(List<LogicPoint> source, float size, int maxPoints)
+        {
+            if (source == null || source.Count == 0) return source;
+
+            float maxDim = GetMaxResolutionDim();
+            if (maxDim <= 0f) return source;
+
+            int startIndex = 0;
+            if (maxPoints > 0 && source.Count > maxPoints)
+            {
+                startIndex = source.Count - maxPoints;
+            }
+
+            float spacingRatio = _strategy != null ? _strategy.SpacingRatio : 0.15f;
+            float minPixelSpacing = size * spacingRatio;
+            if (minPixelSpacing < 1f) minPixelSpacing = 1f;
+            float minLogical = minPixelSpacing * (DrawingConstants.LOGICAL_RESOLUTION / maxDim);
+            float minSqr = minLogical * minLogical;
+
+            _spacingFilteredBuffer.Clear();
+            LogicPoint last = source[startIndex];
+            _spacingFilteredBuffer.Add(last);
+
+            for (int i = startIndex + 1; i < source.Count; i++)
+            {
+                LogicPoint p = source[i];
+                if (LogicPoint.SqrDistance(last, p) >= minSqr)
+                {
+                    _spacingFilteredBuffer.Add(p);
+                    last = p;
+                }
+            }
+
+            return _spacingFilteredBuffer;
+        }
+
+        private void BuildPredictionBuffer(LogicPoint predictedPoint)
+        {
+            _predictionBuffer.Clear();
+
+            int count = _points.Count;
+            int start = 0;
+            if (count > MAX_PREDICTION_POINTS)
+            {
+                start = count - MAX_PREDICTION_POINTS;
+            }
+
+            for (int i = start; i < count; i++)
+            {
+                _predictionBuffer.Add(_points[i]);
+            }
+
+            _predictionBuffer.Add(predictedPoint);
+        }
+
+        private bool ShouldKeepBySpacing(LogicPoint point, float size)
+        {
+            float maxDim = GetMaxResolutionDim();
+            if (maxDim <= 0f) return true;
+
+            float spacingRatio = _strategy != null ? _strategy.SpacingRatio : 0.15f;
+            float minPixelSpacing = size * spacingRatio;
+            if (minPixelSpacing < 1f) minPixelSpacing = 1f;
+            float minLogical = minPixelSpacing * (DrawingConstants.LOGICAL_RESOLUTION / maxDim);
+            float minSqr = minLogical * minLogical;
+
+            if (!_hasLastSpacingPoint) return true;
+            return LogicPoint.SqrDistance(_lastSpacingPoint, point) >= minSqr;
+        }
+
+        private float GetMaxResolutionDim()
+        {
+            if (_ghostRenderer == null) return 0f;
+            Vector2Int res = _ghostRenderer.Resolution;
+            return Mathf.Max(res.x, res.y);
         }
 
         private void UpdateIncrementalGeneratorScale()

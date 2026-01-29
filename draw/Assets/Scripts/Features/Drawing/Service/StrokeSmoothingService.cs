@@ -10,9 +10,9 @@ namespace Features.Drawing.Service
     /// </summary>
     public class StrokeSmoothingService
     {
-        // How many interpolated points per segment (simplistic approach, 
-        // production should use error-metric based adaptive subdivision)
-        private const int STEPS_PER_SEGMENT = 4; 
+        private const int MinStepsPerSegment = 1;
+        private const int MaxStepsPerSegment = 8;
+        private const float StepsPerNormalizedUnit = 64f;
 
         /// <summary>
         /// Generates smoothed LogicPoints from a sequence of control points.
@@ -42,9 +42,10 @@ namespace Features.Drawing.Service
                 LogicPoint p2 = controlPoints[i + 2];
                 LogicPoint p3 = controlPoints[i + 3];
 
-                for (int t = 0; t < STEPS_PER_SEGMENT; t++)
+                int steps = GetSteps(p1, p2);
+                for (int t = 0; t < steps; t++)
                 {
-                    float tNorm = t / (float)STEPS_PER_SEGMENT;
+                    float tNorm = t / (float)steps;
                     LogicPoint interpolated = CatmullRom(p0, p1, p2, p3, tNorm);
                     outputBuffer.Add(interpolated);
                 }
@@ -80,6 +81,15 @@ namespace Features.Drawing.Service
             float pressure = Mathf.Lerp(p1.GetNormalizedPressure(), p2.GetNormalizedPressure(), t);
 
             return LogicPoint.FromNormalized(pos, pressure);
+        }
+
+        private int GetSteps(LogicPoint a, LogicPoint b)
+        {
+            Vector2 v1 = a.ToNormalized();
+            Vector2 v2 = b.ToNormalized();
+            float dist = Vector2.Distance(v1, v2);
+            int steps = Mathf.CeilToInt(dist * StepsPerNormalizedUnit);
+            return Mathf.Clamp(steps, MinStepsPerSegment, MaxStepsPerSegment);
         }
     }
 }

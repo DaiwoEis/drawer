@@ -17,6 +17,9 @@ namespace Features.Drawing.App.Command
         private readonly Color _color;
         private readonly float _size;
         private readonly bool _isEraser;
+        private readonly List<LogicPoint> _smoothingInputBuffer;
+        private readonly List<LogicPoint> _smoothingOutputBuffer;
+        private readonly List<LogicPoint> _singlePointBuffer;
 
         public DrawStrokeCommand(string id, long sequenceId, List<LogicPoint> points, BrushStrategy strategy, Texture2D runtimeTexture, Color color, float size, bool isEraser)
         {
@@ -28,6 +31,9 @@ namespace Features.Drawing.App.Command
             _color = color;
             _size = size;
             _isEraser = isEraser;
+            _smoothingInputBuffer = new List<LogicPoint>(4);
+            _smoothingOutputBuffer = new List<LogicPoint>(64);
+            _singlePointBuffer = new List<LogicPoint>(1);
         }
 
         public void Execute(IStrokeRenderer renderer, StrokeSmoothingService smoothingService)
@@ -58,31 +64,26 @@ namespace Features.Drawing.App.Command
         {
             if (_points == null || _points.Count == 0) return;
 
-            // Use local buffers to avoid memory overhead per command instance
-            var smoothingInputBuffer = new List<LogicPoint>(4);
-            var smoothingOutputBuffer = new List<LogicPoint>(64);
-            var singlePointBuffer = new List<LogicPoint>(1);
-
             for (int i = 0; i < _points.Count; i++)
             {
                 int count = i + 1;
                 
                 if (count >= 4)
                 {
-                     smoothingInputBuffer.Clear();
-                     smoothingInputBuffer.Add(_points[i - 3]);
-                     smoothingInputBuffer.Add(_points[i - 2]);
-                     smoothingInputBuffer.Add(_points[i - 1]);
-                     smoothingInputBuffer.Add(_points[i]);
+                     _smoothingInputBuffer.Clear();
+                     _smoothingInputBuffer.Add(_points[i - 3]);
+                     _smoothingInputBuffer.Add(_points[i - 2]);
+                     _smoothingInputBuffer.Add(_points[i - 1]);
+                     _smoothingInputBuffer.Add(_points[i]);
 
-                     smoothingService.SmoothPoints(smoothingInputBuffer, smoothingOutputBuffer);
-                     renderer.DrawPoints(smoothingOutputBuffer);
+                     smoothingService.SmoothPoints(_smoothingInputBuffer, _smoothingOutputBuffer);
+                     renderer.DrawPoints(_smoothingOutputBuffer);
                 }
                 else
                 {
-                     singlePointBuffer.Clear();
-                     singlePointBuffer.Add(_points[i]);
-                     renderer.DrawPoints(singlePointBuffer);
+                     _singlePointBuffer.Clear();
+                     _singlePointBuffer.Add(_points[i]);
+                     renderer.DrawPoints(_singlePointBuffer);
                 }
             }
         }

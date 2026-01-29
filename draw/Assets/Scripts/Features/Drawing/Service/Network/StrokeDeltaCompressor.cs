@@ -38,8 +38,8 @@ namespace Features.Drawing.Service.Network
             {
                 var p = points[i];
 
-                // Check buffer space (conservative check: max 3 bytes per coord + 1 byte pressure = 7 bytes)
-                if (offset + 7 >= maxOffset)
+                int required = GetCoordinateSize(p.X, prev.X) + GetCoordinateSize(p.Y, prev.Y) + 1;
+                if (offset + required > maxOffset)
                 {
                     Debug.LogWarning("[StrokeDeltaCompressor] Buffer overflow risk. Truncating batch.");
                     break;
@@ -72,6 +72,12 @@ namespace Features.Drawing.Service.Network
                 buffer[offset + 2] = (byte)((current >> 8) & 0xFF);
                 return 3;
             }
+        }
+
+        private static int GetCoordinateSize(ushort current, ushort previous)
+        {
+            int diff = (int)current - (int)previous;
+            return diff >= -127 && diff <= 127 ? 1 : 3;
         }
 
 
