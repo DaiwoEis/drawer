@@ -418,6 +418,68 @@ namespace Features.Drawing.App
             _currentStroke = null;
         }
 
+        public void ForceEndCurrentStroke()
+        {
+            if (_currentStroke != null)
+            {
+                // Force end the current stroke and add it to history
+                EndStroke();
+            }
+        }
+
+        /// <summary>
+        /// Resumes a remote stroke that is currently in progress (e.g. after reconnection).
+        /// This allows the viewer to catch up with an ongoing stroke and continue receiving updates.
+        /// </summary>
+        public void ResumeRemoteStroke(uint id, List<LogicPoint> existingPoints, BrushStrategy strategy, Color color, float size, bool isEraser)
+        {
+            // 1. Force end any local stroke (safety)
+            ForceEndCurrentStroke();
+
+            // 2. Set State
+            if (isEraser)
+            {
+                SetEraser(true);
+                SetSize(size);
+                if (_eraserStrategy != null) _renderer.ConfigureBrush(_eraserStrategy);
+            }
+            else
+            {
+                SetBrushStrategy(strategy); // This sets _currentStrategy
+                SetColor(color);
+                SetSize(size);
+            }
+            
+            // 3. Initialize Stroke Entity (Network Source)
+            uint seed = (uint)Random.Range(0, int.MaxValue); // Seed doesn't matter much for resumption as long as consistent? 
+            // Actually, for perfect sync, we might need the original seed, but for now random is okay or passed in metadata.
+            uint colorInt = ColorToUInt(color);
+            ushort brushId = isEraser ? DrawingConstants.ERASER_BRUSH_ID : (ushort)0;
+            
+            _currentStroke = new StrokeEntity(id, 0, brushId, seed, colorInt, size, _nextSequenceId++);
+
+            // 4. Replay existing points
+            _currentStrokeRaw.Clear();
+            _currentStabilizedPos = Vector2.zero; // Reset stabilization
+            
+            if (existingPoints != null && existingPoints.Count > 0)
+            {
+                // Setup stabilization state from last point
+                _currentStabilizedPos = existingPoints[existingPoints.Count - 1].ToNormalized();
+                _lastAddedPoint = existingPoints[existingPoints.Count - 1];
+
+                // Batch add points to renderer
+                // For efficiency, we could add them all at once if renderer supports it,
+                // but AddPoint handles smoothing windows, so we loop.
+                foreach (var p in existingPoints)
+                {
+                     AddPoint(p);
+                }
+            }
+            
+            // 5. DO NOT EndStroke. Wait for subsequent OnNetworkStrokeMoved/Ended events.
+        }
+
         public void Undo()
         {
             if (!_historyManager.CanUndo) return;
