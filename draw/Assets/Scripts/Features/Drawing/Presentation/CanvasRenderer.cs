@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using Features.Drawing.Domain;
 using Features.Drawing.Domain.ValueObject;
 using Common.Constants;
+using Features.Drawing.App;
 
 namespace Features.Drawing.Presentation
 {
@@ -99,6 +100,8 @@ namespace Features.Drawing.Presentation
             _layoutController.OnLayoutChanged += OnLayoutChanged;
             
             InitializeGraphics();
+
+            Debug.Log($"[Renderer] Initialized. Resolution: {_resolution}, GPU Stamping: {_useGpuStamping}, Shader: {_brushShader?.name}");
 
             _isInitialized = true;
         }
@@ -397,6 +400,7 @@ namespace Features.Drawing.Presentation
                 return;
             }
 
+            // Debug.Log($"[Renderer] DrawPoints. CountHint: {countHint}, Eraser: {_isEraser}");
 
             _layoutController.CheckLayoutChanges();
             _cmd.Clear();
@@ -461,16 +465,20 @@ namespace Features.Drawing.Presentation
             }
             
             // Debug if empty
-            if (_stampBuffer.Count == 0 && points != null)
+            if (_stampBuffer.Count == 0 && pointsCount > 0)
             {
-                // Only log if we expected something (more than 1 point)
-                // int count = 0; foreach(var p in points) count++;
-                // if (count > 1) Debug.LogWarning("[CanvasRenderer] Zero stamps generated!");
+                 // Only warn if we had significant input (LogicPoint resolution might cause small movements to be skipped)
+                 // But if pointsCount is large, it's definitely an issue.
+                 if (DrawingAppService.DebugMode && pointsCount > 1) 
+                 {
+                     Debug.LogWarning($"[Renderer] Zero stamps generated! Input: {pointsCount}, Size: {_brushSize}, Res: {_layoutController.Resolution}");
+                 }
             }
 
             // Draw stamps (Instanced)
             if (_stampBuffer.Count > 0)
             {
+                // Debug.Log($"[Renderer] Drawing {batchCount} stamps. GPU: {shouldTryGpu}");
                 // Ensure Instancing is enabled on material (Standard Requirement)
                 // Note: Standard shaders require this, custom shaders might too.
                 _brushMaterial.enableInstancing = true;

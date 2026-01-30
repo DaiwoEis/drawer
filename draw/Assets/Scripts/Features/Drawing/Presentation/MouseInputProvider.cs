@@ -83,7 +83,11 @@ namespace Features.Drawing.Presentation
                 bool blocked = IsPointerOverBlockingUi(screenPos);
                 if (blocked) 
                 {
-                    // Debug.LogWarning("[MouseInput] UI Block Detected.");
+                    if (DrawingAppService.DebugMode)
+                    {
+                        Debug.LogWarning($"[Input] UI Block Detected at {screenPos}. Raycast hits: {_raycastResults.Count}");
+                        foreach(var hit in _raycastResults) Debug.Log($"[Input] Hit UI: {hit.gameObject.name}");
+                    }
                     return;
                 }
             }
@@ -109,6 +113,7 @@ namespace Features.Drawing.Presentation
             if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
                 _inputArea, screenPos, worldCam, out Vector2 localPos))
             {
+                if (DrawingAppService.DebugMode) Debug.LogWarning($"[Input] ScreenPointToLocalPointInRectangle Failed! Screen: {screenPos}, Cam: {worldCam?.name}");
                 return; 
             }
 
@@ -119,12 +124,17 @@ namespace Features.Drawing.Presentation
 
             if (u < 0 || u > 1 || v < 0 || v > 1)
             {
-                if (_isDrawing) EndStroke();
+                if (_isDrawing) 
+                {
+                     if (DrawingAppService.DebugMode) Debug.Log($"[Input] Stroke Out of Bounds (u={u:F2}, v={v:F2}). Ending Stroke.");
+                     EndStroke();
+                }
                 return;
             }
 
             if (isDown)
             {
+                if (DrawingAppService.DebugMode) Debug.Log($"[Input] StartStroke at UV({u:F4}, {v:F4}) Screen({screenPos})");
                 StartStroke(normalizedPos);
             }
             else if (isHeld && _isDrawing)

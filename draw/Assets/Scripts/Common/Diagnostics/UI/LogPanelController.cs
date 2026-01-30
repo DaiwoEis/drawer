@@ -579,6 +579,7 @@ namespace Common.Diagnostics.UI
             go.transform.SetParent(parent, false);
             var img = go.AddComponent<Image>();
             img.color = new Color(0.25f, 0.25f, 0.3f); // Dark Blue-Gray
+            img.raycastTarget = true;
             
             var btn = go.AddComponent<Button>();
             btn.onClick.AddListener(onClick);
@@ -586,6 +587,12 @@ namespace Common.Diagnostics.UI
             colors.highlightedColor = new Color(0.35f, 0.35f, 0.4f);
             colors.pressedColor = new Color(0.45f, 0.45f, 0.5f);
             btn.colors = colors;
+
+            var rt = go.GetComponent<RectTransform>();
+            rt.anchorMin = new Vector2(0, 1);
+            rt.anchorMax = new Vector2(0, 1);
+            rt.pivot = new Vector2(0, 1);
+            rt.sizeDelta = new Vector2(width, height);
 
             var textObj = new GameObject("Text");
             textObj.transform.SetParent(go.transform, false);
@@ -599,10 +606,13 @@ namespace Common.Diagnostics.UI
             tmp.fontSize = 24; // Readable size
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
+            tmp.raycastTarget = false;
 
             var le = go.AddComponent<LayoutElement>();
             le.minWidth = width;
             le.minHeight = height; // Touch target
+            le.preferredWidth = width;
+            le.preferredHeight = height;
 
             return go;
         }
@@ -617,6 +627,7 @@ namespace Common.Diagnostics.UI
             tmp.fontSize = fontSize;
             tmp.color = color;
             tmp.alignment = TextAlignmentOptions.MidlineLeft;
+            tmp.raycastTarget = false;
             return go;
         }
 
@@ -629,6 +640,12 @@ namespace Common.Diagnostics.UI
             toggle.isOn = isOn;
             toggle.onValueChanged.AddListener(onValueChanged);
 
+            var toggleLayout = go.AddComponent<LayoutElement>();
+            toggleLayout.minWidth = 80;
+            toggleLayout.minHeight = 44;
+            toggleLayout.preferredWidth = 80;
+            toggleLayout.preferredHeight = 44;
+
             var hlg = go.AddComponent<HorizontalLayoutGroup>();
             hlg.spacing = 10;
             hlg.childControlWidth = true;
@@ -639,6 +656,7 @@ namespace Common.Diagnostics.UI
             bg.transform.SetParent(go.transform, false);
             var bgImg = bg.AddComponent<Image>();
             bgImg.color = new Color(0.2f, 0.2f, 0.2f); // Dark background
+            bgImg.raycastTarget = true;
             
             var bgLe = bg.AddComponent<LayoutElement>();
             bgLe.minWidth = 44; // Touch Target
@@ -649,6 +667,7 @@ namespace Common.Diagnostics.UI
             if (check.GetComponent<RectTransform>() == null) check.AddComponent<RectTransform>();
             var checkImg = check.AddComponent<Image>();
             checkImg.color = new Color(0.2f, 0.8f, 0.2f); // Bright Green
+            checkImg.raycastTarget = false;
             
             var checkRect = check.GetComponent<RectTransform>();
             checkRect.anchorMin = new Vector2(0.2f, 0.2f);

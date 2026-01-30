@@ -29,6 +29,7 @@ namespace Features.Drawing.App
         
         [Header("Diagnostics")]
         [SerializeField] private bool _enableDiagnostics = true;
+        public static bool DebugMode = true; // Static switch for other components
 
         private IStructuredLogger _logger;
         private PerformanceMonitor _perfMonitor;
@@ -75,6 +76,8 @@ namespace Features.Drawing.App
 
         private void Awake()
         {
+            DebugMode = _enableDiagnostics;
+
             // Performance: Limit frame rate to 60 FPS to save battery/reduce heat
             Application.targetFrameRate = 60;
             QualitySettings.vSyncCount = 0;
@@ -262,10 +265,12 @@ namespace Features.Drawing.App
                 { 
                     { "isEraser", _inputState.IsEraser },
                     { "size", _inputState.CurrentSize },
-                    { "color", _inputState.CurrentColor }
+                    { "color", _inputState.CurrentColor },
+                    { "point", point.ToString() }
                 };
                 _logger.Info("StrokeStarted", _activeStrokeTrace, meta);
             }
+            if (_enableDiagnostics) Debug.Log($"[App] StartStroke ID:{_activeStrokeTrace.TraceId} Point:{point} Size:{_inputState.CurrentSize}");
 
             // Notify listeners (e.g. UI to close panels)
             OnStrokeStarted?.Invoke();
@@ -369,6 +374,12 @@ namespace Features.Drawing.App
             AddPoint(pointToAdd);
             _lastAddedPoint = pointToAdd;
             
+            // Log every 10th point or if distance is large? Just log count.
+            if (_enableDiagnostics && _currentStrokeRaw.Count % 10 == 0)
+            {
+                 Debug.Log($"[App] MoveStroke ID:{_currentStroke?.Id} Count:{_currentStrokeRaw.Count} Last:{pointToAdd}");
+            }
+
             // Network Sync: Move Stroke
             if (_networkService != null && _networkService.isActiveAndEnabled)
             {
@@ -382,6 +393,8 @@ namespace Features.Drawing.App
             
             _currentStroke.EndStroke();
             _renderer.EndStroke();
+
+            if (_enableDiagnostics) Debug.Log($"[App] EndStroke ID:{_currentStroke.Id} Points:{_currentStroke.Points.Count}");
 
             // FIX: Don't add empty strokes to history
             if (_currentStroke.Points.Count > 0)
