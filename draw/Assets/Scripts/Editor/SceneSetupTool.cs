@@ -37,8 +37,7 @@ namespace Editor
                 GameObject canvasObj = new GameObject("Canvas");
                 canvas = canvasObj.AddComponent<Canvas>();
                 canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-                // PIXEL PERFECT: Ensure crisp rendering
-                canvas.pixelPerfect = true; 
+                canvas.pixelPerfect = false; 
                 
                 canvasObj.AddComponent<CanvasScaler>();
                 canvasObj.AddComponent<GraphicRaycaster>();
@@ -46,8 +45,7 @@ namespace Editor
             }
             else
             {
-                // Ensure existing canvas has Pixel Perfect enabled
-                canvas.pixelPerfect = true;
+                canvas.pixelPerfect = false;
             }
             
             // Ensure Scaler is configured for High DPI
@@ -249,8 +247,7 @@ namespace Editor
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
             scaler.matchWidthOrHeight = 0.5f; 
             
-            // Ensure Pixel Perfect is set on the Canvas component itself
-            canvas.pixelPerfect = true;
+            canvas.pixelPerfect = false;
         }
 
         private static void SetupBrushAssets()
