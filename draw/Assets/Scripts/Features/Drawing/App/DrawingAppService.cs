@@ -76,6 +76,10 @@ namespace Features.Drawing.App
 
         private void Awake()
         {
+            if (Application.platform == RuntimePlatform.IPhonePlayer && !Debug.isDebugBuild)
+            {
+                _enableDiagnostics = false;
+            }
             DebugMode = _enableDiagnostics;
 
             // Performance: Limit frame rate to 60 FPS to save battery/reduce heat
@@ -665,9 +669,12 @@ namespace Features.Drawing.App
             }
             else
             {
-                _singlePointBuffer.Clear();
-                _singlePointBuffer.Add(point);
-                _renderer.DrawPoints(_singlePointBuffer);
+                if (_inputState.IsEraser)
+                {
+                    _singlePointBuffer.Clear();
+                    _singlePointBuffer.Add(point);
+                    _renderer.DrawPoints(_singlePointBuffer);
+                }
             }
         }
 

@@ -46,6 +46,10 @@ namespace Common.Diagnostics.UI
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void AutoInitialize()
         {
+            if (Application.platform == RuntimePlatform.IPhonePlayer && !Debug.isDebugBuild)
+            {
+                return;
+            }
             if (FindObjectOfType<LogPanelController>() == null)
             {
                 var go = new GameObject("LogPanelSystem");

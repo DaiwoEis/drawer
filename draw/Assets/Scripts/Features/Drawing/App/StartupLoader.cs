@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -10,13 +11,24 @@ namespace Features.Drawing.App
     public class StartupLoader : MonoBehaviour
     {
         [SerializeField] private bool _prewarmShaders = true;
+        [SerializeField] private int _prewarmDelayFrames = 1;
 
         private void Start()
         {
             if (_prewarmShaders)
             {
-                PrewarmResources();
+                StartCoroutine(PrewarmAfterFrames());
             }
+        }
+
+        private IEnumerator PrewarmAfterFrames()
+        {
+            for (int i = 0; i < _prewarmDelayFrames; i++)
+            {
+                yield return null;
+            }
+
+            PrewarmResources();
         }
 
         private void PrewarmResources()
