@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using Features.Drawing.Domain;
@@ -74,26 +75,30 @@ namespace Features.Drawing.App
         // Events
         public event System.Action OnStrokeStarted;
 
-        private void Awake()
+        private IEnumerator Start()
         {
-            if (Application.platform == RuntimePlatform.IPhonePlayer && !Debug.isDebugBuild)
-            {
-                _enableDiagnostics = false;
-            }
-            DebugMode = _enableDiagnostics;
-
-            // Performance: Limit frame rate to 60 FPS to save battery/reduce heat
+            // Performance: Limit frame rate to 60 FPS
             Application.targetFrameRate = 60;
             QualitySettings.vSyncCount = 0;
 
-            // 1. Resolve Renderer (Priority: Inspector -> FindObjectOfType)
+            if (_enableDiagnostics)
+            {
+                // Create default logger
+                IStructuredLogger logger = new StructuredLogger("DrawingApp", 10, true);
+                _perfMonitor = gameObject.AddComponent<PerformanceMonitor>();
+                _perfMonitor.Initialize(logger);
+                
+                // Temporary DI setup for Logger if needed
+            }
+
+            // 1. Resolve Renderer
             if (_concreteRenderer == null) 
                 _concreteRenderer = FindObjectOfType<Features.Drawing.Presentation.CanvasRenderer>();
 
-            // Ensure Renderer is initialized explicitly (No Coroutines)
+            // 2. Async Initialize Renderer (Wait for Shader Warmup & RT Allocation)
             if (_concreteRenderer != null)
             {
-                _concreteRenderer.Initialize();
+                yield return _concreteRenderer.InitializeAsync();
             }
                 
             IStrokeRenderer renderer = _concreteRenderer as IStrokeRenderer;
@@ -103,19 +108,18 @@ namespace Features.Drawing.App
                 Debug.LogError("DrawingAppService: CanvasRenderer does not implement IStrokeRenderer!");
             }
             
-            // 2. Initialize with defaults (Dependency Injection Fallback)
-            // If dependencies were not injected via Construct(), we create them here.
-            // Create default logger if diagnostics enabled
-            IStructuredLogger logger = null;
-            if (_enableDiagnostics)
-            {
-                logger = new StructuredLogger("DrawingApp", 10, true);
-                // Attach PerformanceMonitor
-                _perfMonitor = gameObject.AddComponent<PerformanceMonitor>();
-                _perfMonitor.Initialize(logger);
-            }
+            // 3. Initialize App Logic
+            // Note: We pass null for dependencies to trigger internal default creation if not already injected
+            Initialize(renderer, null, null, null, _enableDiagnostics ? new StructuredLogger("DrawingApp", 10, true) : null);
+        }
 
-            Initialize(renderer, null, null, null, logger);
+        private void Awake()
+        {
+            if (Application.platform == RuntimePlatform.IPhonePlayer && !Debug.isDebugBuild)
+            {
+                _enableDiagnostics = false;
+            }
+            DebugMode = _enableDiagnostics;
         }
 
         private void OnDestroy()

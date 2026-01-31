@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.Rendering;
+using System.Collections;
 using System.Collections.Generic;
 using Features.Drawing.Domain;
 using Features.Drawing.Domain.ValueObject;
@@ -90,20 +91,67 @@ namespace Features.Drawing.Presentation
             // Now relies on explicit Initialize() call from AppService or Bootstrapper.
         }
 
-        public void Initialize()
+        public IEnumerator InitializeAsync()
         {
-            if (_isInitialized) return;
+            if (_isInitialized) yield break;
 
+            // 1. GPU Generator (Compute Shader)
             InitializeGpuGenerator();
+            yield return null; // Yield after loading shader
             
+            // 2. Layout Controller (RenderTexture Allocation - Heavy)
             _layoutController = new CanvasLayoutController(_displayImage, _resolution, 0);
             _layoutController.OnLayoutChanged += OnLayoutChanged;
-            
-            InitializeGraphics();
+            _layoutController.Initialize(); 
+            _layoutController.OnLayoutChanged += () => OnResolutionChanged?.Invoke(_layoutController.Resolution);
+            yield return null; // Yield after RT allocation
 
-            Debug.Log($"[Renderer] Initialized. Resolution: {_resolution}, GPU Stamping: {_useGpuStamping}, Shader: {_brushShader?.name}");
+            // 3. Graphics Resources (Materials, Meshes)
+            // Pre-warm Shaders (Heavy operation)
+            if (_shaderVariants != null)
+            {
+                _shaderVariants.WarmUp();
+                yield return null; 
+            }
+
+            // Setup Material
+            if (_brushShader == null) 
+                _brushShader = Shader.Find("Drawing/BrushStamp");
+            
+            if (_brushShader == null)
+            {
+                Debug.LogError("[CanvasRenderer] CRITICAL: Brush Shader NOT FOUND!");
+                yield break;
+            }
+
+            // Clean up existing material if any (re-init safety)
+            if (_brushMaterial != null) Destroy(_brushMaterial);
+            _brushMaterial = new Material(_brushShader);
+            if (_defaultBrushTip != null)
+                _brushMaterial.mainTexture = _defaultBrushTip;
+
+            // Setup CommandBuffer
+            _cmd = new CommandBuffer();
+            _cmd.name = "DrawingBuffer";
+
+            // Create Quad Mesh for stamping
+            _quadMesh = CreateQuad();
+            
+            // Init props
+            _props = new MaterialPropertyBlock();
+            
+            // Apply initial scale
+            ApplyStampGeneratorScale();
+
+            Debug.Log($"[Renderer] Initialized Async. Resolution: {_resolution}, GPU Stamping: {_useGpuStamping}");
 
             _isInitialized = true;
+        }
+
+        // Deprecated synchronous init
+        public void Initialize()
+        {
+             StartCoroutine(InitializeAsync());
         }
 
         // Removed InitializeRoutine
@@ -170,43 +218,7 @@ namespace Features.Drawing.Presentation
             }
         }
 
-        private void InitializeGraphics()
-        {
-            _layoutController.Initialize();
-            _layoutController.OnLayoutChanged += () => OnResolutionChanged?.Invoke(_layoutController.Resolution);
 
-            // 1. Pre-warm Shaders
-            if (_shaderVariants != null)
-            {
-                _shaderVariants.WarmUp();
-            }
-
-            // 2. Setup Material
-            if (_brushShader == null) 
-                _brushShader = Shader.Find("Drawing/BrushStamp");
-            
-            if (_brushShader == null)
-            {
-                Debug.LogError("[CanvasRenderer] CRITICAL: Brush Shader NOT FOUND!");
-                return;
-            }
-
-            // Clean up existing material if any (re-init safety)
-            if (_brushMaterial != null) Destroy(_brushMaterial);
-            _brushMaterial = new Material(_brushShader);
-            if (_defaultBrushTip != null)
-                _brushMaterial.mainTexture = _defaultBrushTip;
-
-            // 3. Setup CommandBuffer
-            _cmd = new CommandBuffer();
-            _cmd.name = "DrawingBuffer";
-
-            // 4. Create Quad Mesh for stamping
-            _quadMesh = CreateQuad();
-            
-            // 5. Init props
-            _props = new MaterialPropertyBlock();
-        }
 
         private void ApplyStampGeneratorScale()
         {
