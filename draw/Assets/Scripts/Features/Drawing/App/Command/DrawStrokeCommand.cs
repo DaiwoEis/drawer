@@ -79,11 +79,11 @@ namespace Features.Drawing.App.Command
                      smoothingService.SmoothPoints(_smoothingInputBuffer, _smoothingOutputBuffer);
                      renderer.DrawPoints(_smoothingOutputBuffer);
                 }
-                else
+                else if (_isEraser)
                 {
-                     _singlePointBuffer.Clear();
-                     _singlePointBuffer.Add(_points[i]);
-                     renderer.DrawPoints(_singlePointBuffer);
+                    _singlePointBuffer.Clear();
+                    _singlePointBuffer.Add(_points[i]);
+                    renderer.DrawPoints(_singlePointBuffer);
                 }
             }
         }
