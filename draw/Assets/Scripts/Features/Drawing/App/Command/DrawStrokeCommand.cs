@@ -64,6 +64,12 @@ namespace Features.Drawing.App.Command
         {
             if (_points == null || _points.Count == 0) return;
 
+            if (!_isEraser && _points.Count < 4)
+            {
+                renderer.DrawPoints(_points);
+                return;
+            }
+
             for (int i = 0; i < _points.Count; i++)
             {
                 int count = i + 1;

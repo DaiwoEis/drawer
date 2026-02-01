@@ -400,12 +400,17 @@ namespace Features.Drawing.App
             if (_currentStroke == null) return;
             
             _currentStroke.EndStroke();
-            _renderer.EndStroke();
 
-            if (_enableDiagnostics) Debug.Log($"[App] EndStroke ID:{_currentStroke.Id} Points:{_currentStroke.Points.Count}");
+            int pointCount = _currentStroke.Points.Count;
+            if (!_inputState.IsEraser && pointCount > 0 && pointCount < 4)
+            {
+                _renderer.DrawPoints(_currentStroke.Points);
+            }
+
+            if (_enableDiagnostics) Debug.Log($"[App] EndStroke ID:{_currentStroke.Id} Points:{pointCount}");
 
             // FIX: Don't add empty strokes to history
-            if (_currentStroke.Points.Count > 0)
+            if (pointCount > 0)
             {
                 // OPTIMIZATION: Discard eraser strokes that don't intersect with any existing ink.
                 if (_inputState.IsEraser)
@@ -415,6 +420,7 @@ namespace Features.Drawing.App
                     if (!isEffective)
                     {
                         Debug.Log($"[Optimization] Eraser stroke discarded [ID: {_currentStroke.Id}] - Redundant (covered area or no ink).");
+                        _renderer.EndStroke();
                         _currentStroke = null;
                         return;
                     }
@@ -456,6 +462,7 @@ namespace Features.Drawing.App
             // var bytes = StrokeSerializer.Serialize(_currentStroke);
             // Debug.Log($"[Stroke] Ended. Bytes: {bytes.Length}");
             
+            _renderer.EndStroke();
             _currentStroke = null;
         }
 

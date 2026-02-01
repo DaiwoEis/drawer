@@ -136,6 +136,10 @@ namespace Features.Drawing.Presentation
             {
                 if (DrawingAppService.DebugMode) Debug.Log($"[Input] StartStroke at UV({u:F4}, {v:F4}) Screen({screenPos})");
                 StartStroke(normalizedPos);
+                if (isUp)
+                {
+                    EndStroke();
+                }
             }
             else if (isHeld && _isDrawing)
             {
