@@ -24,14 +24,12 @@ namespace Features.Drawing.Presentation
     /// Handles the low-level GPU drawing using CommandBuffers.
     /// Implements the "Mesh Stamping" technique.
     /// </summary>
-    public class CanvasRenderer : MonoBehaviour, Features.Drawing.Domain.Interface.IStrokeRenderer
+    public class CanvasRenderer : BaseStrokeRenderer, Features.Drawing.Domain.Interface.IStrokeRenderer
     {
-        [Header("Settings")]
+        [Header("Canvas Settings")]
         [SerializeField] private Vector2Int _resolution = new Vector2Int(2048, 2048);
         [SerializeField] private RawImage _displayImage; // UI to display the RT
-        [SerializeField] private Shader _brushShader;
         [SerializeField] private ShaderVariantCollection _shaderVariants; // Pre-warm shaders
-        [SerializeField] private Texture2D _defaultBrushTip;
 
         [Header("Runtime Debug")]
         [SerializeField] private float _brushSize = 50.0f;
@@ -52,10 +50,7 @@ namespace Features.Drawing.Presentation
         // RenderTextures managed by CanvasLayoutController
         private bool _isBaking = false;
 
-        private Material _brushMaterial;
-        private CommandBuffer _cmd;
-        private Mesh _quadMesh; // Reused quad mesh
-        private MaterialPropertyBlock _props; // Property block for colors
+        // Base class handles: _brushMaterial, _cmd, _quadMesh, _props
 
         // Interpolation Logic Delegated to Generator
         private StrokeStampGenerator _stampGenerator = new StrokeStampGenerator();
@@ -63,9 +58,6 @@ namespace Features.Drawing.Presentation
         private bool _useGpuStamping = true;
         private List<StampData> _stampBuffer = new List<StampData>(1024);
         
-        // Cache for batching (optimization)
-        private const int BATCH_SIZE = 1023; // Max for DrawMeshInstanced
-
         private CanvasLayoutController _layoutController;
 
         // Runtime Optimization
@@ -114,31 +106,8 @@ namespace Features.Drawing.Presentation
                 yield return null; 
             }
 
-            // Setup Material
-            if (_brushShader == null) 
-                _brushShader = Shader.Find("Drawing/BrushStamp");
-            
-            if (_brushShader == null)
-            {
-                Debug.LogError("[CanvasRenderer] CRITICAL: Brush Shader NOT FOUND!");
-                yield break;
-            }
-
-            // Clean up existing material if any (re-init safety)
-            if (_brushMaterial != null) Destroy(_brushMaterial);
-            _brushMaterial = new Material(_brushShader);
-            if (_defaultBrushTip != null)
-                _brushMaterial.mainTexture = _defaultBrushTip;
-
-            // Setup CommandBuffer
-            _cmd = new CommandBuffer();
-            _cmd.name = "DrawingBuffer";
-
-            // Create Quad Mesh for stamping
-            _quadMesh = CreateQuad();
-            
-            // Init props
-            _props = new MaterialPropertyBlock();
+            // Setup Base Resources (Material, CommandBuffer, Mesh)
+            InitializeGraphics("DrawingBuffer");
             
             // Apply initial scale
             ApplyStampGeneratorScale();
@@ -205,10 +174,7 @@ namespace Features.Drawing.Presentation
         {
             _layoutController?.Release();
 
-            if (_cmd != null) _cmd.Release();
-            if (_brushMaterial != null) Destroy(_brushMaterial);
-            // Don't destroy _quadMesh if it's a primitive, but if we created it:
-            if (_quadMesh != null) Destroy(_quadMesh);
+            // Base resources cleaned up in base.OnDestroy()
             
             // Already handled in OnDisable, but double check
             if (_gpuStampGenerator != null)
@@ -216,6 +182,8 @@ namespace Features.Drawing.Presentation
                 _gpuStampGenerator.Dispose();
                 _gpuStampGenerator = null;
             }
+            
+            base.OnDestroy();
         }
 
 
@@ -487,53 +455,30 @@ namespace Features.Drawing.Presentation
                  }
             }
 
-            // Draw stamps (Instanced)
+            // Draw stamps (using Base Batch)
             if (_stampBuffer.Count > 0)
             {
-                // Debug.Log($"[Renderer] Drawing {batchCount} stamps. GPU: {shouldTryGpu}");
-                // Ensure Instancing is enabled on material (Standard Requirement)
-                // Note: Standard shaders require this, custom shaders might too.
-                _brushMaterial.enableInstancing = true;
-
-                int batchCount = 0;
-                for (int i = 0; i < _stampBuffer.Count; i++)
-                {
-                    var stamp = _stampBuffer[i];
-                    
-                    if (batchCount >= BATCH_SIZE)
-                    {
-                        _cmd.DrawMeshInstanced(_quadMesh, 0, _brushMaterial, 0, _matrices, batchCount, _props);
-                        batchCount = 0;
-                    }
-
-                    _matrices[batchCount] = Matrix4x4.TRS(
-                        new Vector3(stamp.Position.x, stamp.Position.y, 0),
-                        Quaternion.Euler(0, 0, stamp.Rotation),
-                        new Vector3(stamp.Size, stamp.Size, 1)
-                    );
-                    batchCount++;
-                }
-
-                if (batchCount > 0)
-                {
-                    _cmd.DrawMeshInstanced(_quadMesh, 0, _brushMaterial, 0, _matrices, batchCount, _props);
-                }
+                DrawStampsBatch(
+                    _stampBuffer, 
+                    _isBaking ? _layoutController.BakedRT : _layoutController.ActiveRT, 
+                    _layoutController.Resolution,
+                    _brushColor,
+                    _brushOpacity,
+                    _isEraser,
+                    false // CanvasRenderer uses BlendOp for eraser, not red trail
+                );
             }
-
-            Graphics.ExecuteCommandBuffer(_cmd);
         }
-
-        // Cache for batching (optimization)
-        private Matrix4x4[] _matrices = new Matrix4x4[BATCH_SIZE];
 
         private void DrawStamp(Vector2 pos, float size, float angle)
         {
             // Fallback / Legacy single draw
              Matrix4x4 matrix = Matrix4x4.TRS(
                 new Vector3(pos.x, pos.y, 0), 
-                Quaternion.Euler(0, 0, angle),
+                Quaternion.Euler(0, 0, angle), 
                 new Vector3(size, size, 1)
             );
+             
             _cmd.DrawMesh(_quadMesh, matrix, _brushMaterial, 0, 0, _props);
         }
         

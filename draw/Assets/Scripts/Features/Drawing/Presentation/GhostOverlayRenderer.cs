@@ -13,39 +13,32 @@ namespace Features.Drawing.Presentation
     /// Overlays on top of the main canvas.
     /// Uses Retained Mode (Clear & Redraw per frame) to support Extrapolation/Prediction.
     /// </summary>
-    public class GhostOverlayRenderer : MonoBehaviour
+    public class GhostOverlayRenderer : BaseStrokeRenderer
     {
         [Header("References")]
         [SerializeField] private CanvasRenderer _mainRenderer;
         [SerializeField] private RawImage _displayImage;
-        [SerializeField] private Shader _brushShader;
-        [SerializeField] private Texture2D _defaultBrushTip;
+        // _brushShader and _defaultBrushTip are in BaseStrokeRenderer
 
         [Header("Ghost Settings")]
         [SerializeField] private Color _eraserTrailColor = new Color(1f, 0f, 0f, 0.2f); // Semi-transparent red
 
         // State
         private CanvasLayoutController _layoutController;
-        private Material _brushMaterial;
-        private CommandBuffer _cmd;
-        private Mesh _quadMesh;
-        private MaterialPropertyBlock _props;
+        // _brushMaterial, _cmd, _quadMesh, _props, _matrices are in BaseStrokeRenderer
         
         private StrokeStampGenerator _stampGenerator = new StrokeStampGenerator();
         private List<StampData> _stampBuffer = new List<StampData>(1024);
-        private const int BATCH_SIZE = 1023;
-        private Matrix4x4[] _matrices = new Matrix4x4[BATCH_SIZE];
 
         // Brush State
         private float _brushOpacity = 1f;
-        // _isEraser, _brushColor, _baseBrushSize removed as they are passed per-call in DrawGhostStroke
 
         private void Awake()
         {
             if (_mainRenderer == null)
                 _mainRenderer = FindObjectOfType<CanvasRenderer>();
                 
-            InitializeGraphics();
+            InitializeGraphics("GhostBuffer");
         }
 
         private void Start()
@@ -59,15 +52,14 @@ namespace Features.Drawing.Presentation
             }
         }
 
-        private void OnDestroy()
+        protected override void OnDestroy()
         {
             if (_mainRenderer != null)
                 _mainRenderer.OnResolutionChanged -= OnMainResolutionChanged;
 
             _layoutController?.Release();
-            if (_cmd != null) _cmd.Release();
-            if (_brushMaterial != null) Destroy(_brushMaterial);
-            if (_quadMesh != null) Destroy(_quadMesh);
+            
+            base.OnDestroy();
         }
 
         private void OnMainResolutionChanged(Vector2Int resolution)
@@ -106,24 +98,7 @@ namespace Features.Drawing.Presentation
             return _layoutController != null ? _layoutController.GetBrushSizeScale() : 1f;
         }
 
-        private void InitializeGraphics()
-        {
-            if (_brushShader == null) _brushShader = Shader.Find("Drawing/BrushStamp");
-            if (_brushShader == null)
-            {
-                Debug.LogError("[GhostOverlayRenderer] Brush Shader not found!");
-                return;
-            }
-
-            _brushMaterial = new Material(_brushShader);
-            if (_defaultBrushTip != null) _brushMaterial.mainTexture = _defaultBrushTip;
-
-            _cmd = new CommandBuffer();
-            _cmd.name = "GhostBuffer";
-
-            _quadMesh = CreateQuad();
-            _props = new MaterialPropertyBlock();
-        }
+        // InitializeGraphics is inherited from BaseStrokeRenderer
 
         // --- IStrokeRenderer Implementation ---
 
@@ -210,53 +185,18 @@ namespace Features.Drawing.Presentation
                 ConfigureBrush(strategy);
             }
 
-            _cmd.Clear();
-            _cmd.SetRenderTarget(_layoutController.ActiveRT);
+            // Ghost strokes always use red trail for eraser
+            Color finalColor = isEraser ? _eraserTrailColor : color;
 
-            if (isEraser)
-            {
-                _brushMaterial.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
-                _brushMaterial.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
-                _brushMaterial.SetInt("_BlendOp", (int)BlendOp.Add);
-                _props.SetColor("_Color", _eraserTrailColor);
-            }
-            else
-            {
-                Color drawColor = color;
-                drawColor.a *= _brushOpacity;
-                _props.SetColor("_Color", drawColor);
-            }
-
-            _cmd.SetViewMatrix(Matrix4x4.identity);
-            _cmd.SetProjectionMatrix(Matrix4x4.Ortho(0, _layoutController.Resolution.x, 0, _layoutController.Resolution.y, -1, 1));
-
-            _brushMaterial.enableInstancing = true;
-
-            int batchCount = 0;
-            for (int i = 0; i < stamps.Count; i++)
-            {
-                var stamp = stamps[i];
-
-                if (batchCount >= BATCH_SIZE)
-                {
-                    _cmd.DrawMeshInstanced(_quadMesh, 0, _brushMaterial, 0, _matrices, batchCount, _props);
-                    batchCount = 0;
-                }
-
-                _matrices[batchCount] = Matrix4x4.TRS(
-                    new Vector3(stamp.Position.x, stamp.Position.y, 0),
-                    Quaternion.Euler(0, 0, stamp.Rotation),
-                    new Vector3(stamp.Size, stamp.Size, 1)
-                );
-                batchCount++;
-            }
-
-            if (batchCount > 0)
-            {
-                _cmd.DrawMeshInstanced(_quadMesh, 0, _brushMaterial, 0, _matrices, batchCount, _props);
-            }
-
-            Graphics.ExecuteCommandBuffer(_cmd);
+            DrawStampsBatch(
+                stamps,
+                _layoutController.ActiveRT,
+                _layoutController.Resolution,
+                finalColor,
+                _brushOpacity,
+                isEraser,
+                useEraserRedTrail: true
+            );
         }
 
         // Unused legacy methods from IStrokeRenderer
@@ -266,19 +206,6 @@ namespace Features.Drawing.Presentation
 
         // --- Helpers ---
 
-        private Mesh CreateQuad()
-        {
-            Mesh mesh = new Mesh();
-            mesh.vertices = new Vector3[] {
-                new Vector3(-0.5f, -0.5f, 0), new Vector3(0.5f, -0.5f, 0),
-                new Vector3(-0.5f, 0.5f, 0), new Vector3(0.5f, 0.5f, 0)
-            };
-            mesh.uv = new Vector2[] {
-                new Vector2(0, 0), new Vector2(1, 0),
-                new Vector2(0, 1), new Vector2(1, 1)
-            };
-            mesh.triangles = new int[] { 0, 2, 1, 2, 3, 1 };
-            return mesh;
-        }
+        // CreateQuad is inherited from BaseStrokeRenderer
     }
 }
