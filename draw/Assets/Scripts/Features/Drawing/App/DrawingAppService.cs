@@ -664,29 +664,16 @@ namespace Features.Drawing.App
                 _currentStroke.AddPoints(_singlePointArray);
             }
 
-            int count = _currentStrokeRaw.Count;
-
-            if (count >= 4)
-            {
-                // Sliding window smoothing
-                _smoothingInputBuffer.Clear();
-                _smoothingInputBuffer.Add(_currentStrokeRaw[count - 4]);
-                _smoothingInputBuffer.Add(_currentStrokeRaw[count - 3]);
-                _smoothingInputBuffer.Add(_currentStrokeRaw[count - 2]);
-                _smoothingInputBuffer.Add(_currentStrokeRaw[count - 1]);
-                
-                _smoothingService.SmoothPoints(_smoothingInputBuffer, _smoothingOutputBuffer);
-                _renderer.DrawPoints(_smoothingOutputBuffer);
-            }
-            else
-            {
-                if (_inputState.IsEraser)
-                {
-                    _singlePointBuffer.Clear();
-                    _singlePointBuffer.Add(point);
-                    _renderer.DrawPoints(_singlePointBuffer);
-                }
-            }
+            StrokeDrawHelper.DrawIncremental(
+                _renderer,
+                _smoothingService,
+                _currentStrokeRaw,
+                _currentStrokeRaw.Count - 1,
+                _inputState.IsEraser,
+                _smoothingInputBuffer,
+                _smoothingOutputBuffer,
+                _singlePointBuffer
+            );
         }
 
         // --- Network Sync Helpers (Proposed) ---

@@ -62,36 +62,15 @@ namespace Features.Drawing.App.Command
 
         private void DrawStrokePoints(IStrokeRenderer renderer, StrokeSmoothingService smoothingService)
         {
-            if (_points == null || _points.Count == 0) return;
-
-            if (!_isEraser && _points.Count < 4)
-            {
-                renderer.DrawPoints(_points);
-                return;
-            }
-
-            for (int i = 0; i < _points.Count; i++)
-            {
-                int count = i + 1;
-                
-                if (count >= 4)
-                {
-                     _smoothingInputBuffer.Clear();
-                     _smoothingInputBuffer.Add(_points[i - 3]);
-                     _smoothingInputBuffer.Add(_points[i - 2]);
-                     _smoothingInputBuffer.Add(_points[i - 1]);
-                     _smoothingInputBuffer.Add(_points[i]);
-
-                     smoothingService.SmoothPoints(_smoothingInputBuffer, _smoothingOutputBuffer);
-                     renderer.DrawPoints(_smoothingOutputBuffer);
-                }
-                else if (_isEraser)
-                {
-                    _singlePointBuffer.Clear();
-                    _singlePointBuffer.Add(_points[i]);
-                    renderer.DrawPoints(_singlePointBuffer);
-                }
-            }
+            StrokeDrawHelper.DrawFullStroke(
+                renderer,
+                smoothingService,
+                _points,
+                _isEraser,
+                _smoothingInputBuffer,
+                _smoothingOutputBuffer,
+                _singlePointBuffer
+            );
         }
     }
 }
