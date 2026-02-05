@@ -80,10 +80,11 @@ namespace Features.Drawing.Presentation
             if (stamps == null || stamps.Count == 0) return;
 
             _cmd.Clear();
-            _cmd.SetRenderTarget(target);
             
-            // Setup Blend Modes
+            // Setup Blend Modes (Must be called before adding commands if setting ExecutionFlags)
             SetupBlendModes(isEraser, useEraserRedTrail);
+
+            _cmd.SetRenderTarget(target);
 
             // Setup Color
             Color drawColor = color;
