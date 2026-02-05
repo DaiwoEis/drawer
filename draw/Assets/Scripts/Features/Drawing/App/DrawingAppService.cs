@@ -52,7 +52,7 @@ namespace Features.Drawing.App
         
         // Services
         private IStrokeRenderer _renderer;
-        private DrawingHistoryManager _historyManager;
+        private VisualDrawingHistoryManager _historyManager;
 
         // Buffers
         private List<LogicPoint> _currentStrokeRaw = new List<LogicPoint>(1024);
@@ -144,7 +144,7 @@ namespace Features.Drawing.App
             IStrokeRenderer renderer,
             StrokeSmoothingService smoothingService = null,
             StrokeCollisionService collisionService = null,
-            DrawingHistoryManager historyManager = null,
+            VisualDrawingHistoryManager historyManager = null,
             IStructuredLogger logger = null)
         {
             // Only set if not null (allow partial injection logic if needed, though usually all or nothing)
@@ -161,7 +161,7 @@ namespace Features.Drawing.App
             
             // HistoryManager depends on others
             if (_historyManager == null) 
-                _historyManager = historyManager ?? new DrawingHistoryManager(_renderer, effectiveSmoothingService, _collisionService);
+                _historyManager = historyManager ?? new VisualDrawingHistoryManager(_renderer, effectiveSmoothingService, _collisionService);
 
             // Init State Manager
             _inputState = new InputStateManager(_renderer, _eraserStrategy);

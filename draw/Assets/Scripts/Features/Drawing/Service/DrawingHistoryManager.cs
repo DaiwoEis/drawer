@@ -21,17 +21,10 @@ namespace Features.Drawing.Service
         private HashSet<string> _activeStrokeIds = new HashSet<string>();
 
         // Dependencies
-        private readonly IStrokeRenderer _renderer;
-        private readonly StrokeSmoothingService _smoothingService;
         private readonly StrokeCollisionService _collisionService;
 
-        public DrawingHistoryManager(
-            IStrokeRenderer renderer,
-            StrokeSmoothingService smoothingService,
-            StrokeCollisionService collisionService)
+        public DrawingHistoryManager(StrokeCollisionService collisionService)
         {
-            _renderer = renderer;
-            _smoothingService = smoothingService;
             _collisionService = collisionService;
         }
 
@@ -41,12 +34,17 @@ namespace Features.Drawing.Service
         public HashSet<string> ActiveStrokeIds => _activeStrokeIds;
         public bool CanUndo => _history.Count > 0;
         public bool CanRedo => _redoHistory.Count > 0;
-        public StrokeSmoothingService SmoothingService => _smoothingService;
+
+        // Hooks for subclasses (Visual Layer)
+        protected virtual void OnCommandAdded(ICommand cmd) { }
+        protected virtual void OnCommandArchiving(ICommand cmd) { }
+        protected virtual void OnHistoryChanged() { }
+        protected virtual void ExecuteCommandVisual(ICommand cmd) { }
 
         /// <summary>
         /// Adds a command to history and handles sliding window/baking.
         /// </summary>
-        public void AddCommand(ICommand cmd)
+        public virtual void AddCommand(ICommand cmd)
         {
             Debug.Log($"[History] Added command: {cmd.GetType().Name} [ID: {cmd.Id}]. Count: {_history.Count + 1}");
             _history.Add(cmd);
@@ -54,11 +52,17 @@ namespace Features.Drawing.Service
 
             _redoHistory.Clear();
 
+            // Hook: Visual update
+            OnCommandAdded(cmd);
+
             // Maintain sliding window (Keep last 50 active)
             while (_history.Count > 50)
             {
                 var removedCmd = _history[0];
                 
+                // Hook: Baking before removal
+                OnCommandArchiving(removedCmd);
+
                 // Archive it (Logical Save)
                 _archivedHistory.Add(removedCmd);
                 // Note: We KEEP the ID in _activeStrokeIds because it is still part of the drawing
@@ -79,20 +83,12 @@ namespace Features.Drawing.Service
                     _archivedHistory.Clear();
                     _archivedHistory.Add(removedCmd);
                 }
-
-                // Bake the command into the back buffer before removing it (Visual Save)
-                if (_renderer != null)
-                {
-                    _renderer.SetBakingMode(true);
-                    removedCmd.Execute(_renderer, _smoothingService);
-                    _renderer.SetBakingMode(false);
-                }
                 
                 _history.RemoveAt(0);
             }
         }
 
-        public void Undo()
+        public virtual void Undo()
         {
             if (_history.Count == 0) return;
 
@@ -106,10 +102,10 @@ namespace Features.Drawing.Service
             // Add to Redo history
             _redoHistory.Add(cmd);
             
-            RedrawHistory();
+            OnHistoryChanged();
         }
 
-        public void Redo()
+        public virtual void Redo()
         {
             if (_redoHistory.Count == 0) return;
 
@@ -122,7 +118,7 @@ namespace Features.Drawing.Service
             _history.Add(cmd);
             _activeStrokeIds.Add(cmd.Id);
 
-            RedrawHistory();
+            OnHistoryChanged();
         }
 
         /// <summary>
@@ -178,20 +174,22 @@ namespace Features.Drawing.Service
         /// <summary>
         /// Replaces the current local history with a remote authoritative history.
         /// </summary>
-        public void ReplaceHistory(List<ICommand> remoteHistory)
+        public virtual void ReplaceHistory(List<ICommand> remoteHistory)
         {
             // 1. Clear everything
             _history.Clear();
             _redoHistory.Clear();
             _archivedHistory.Clear();
-            _renderer.ClearCanvas();
             _collisionService.Clear();
             _activeStrokeIds.Clear();
+            
+            // Subclass hook for clearing visual state is handled by overriding this method or hook?
+            // Since we cleared lists, subclass override should handle visual clear.
 
             // 2. Replay all commands (Execute without adding to history)
             foreach (var cmd in remoteHistory)
             {
-                cmd.Execute(_renderer, _smoothingService);
+                ExecuteCommandVisual(cmd);
                 _activeStrokeIds.Add(cmd.Id);
             }
 
@@ -209,8 +207,6 @@ namespace Features.Drawing.Service
             {
                 _history.AddRange(remoteHistory.GetRange(archiveCount, activeCount));
             }
-            
-            // Note: Visual state is already correct from execution above.
         }
 
         /// <summary>
@@ -233,59 +229,9 @@ namespace Features.Drawing.Service
         /// <summary>
         /// Rebuilds the BakedRT from the logical archive.
         /// </summary>
-        public void RebuildBackBuffer()
+        public virtual void RebuildBackBuffer()
         {
-            if (_renderer == null) return;
-            
-            _renderer.SetBakingMode(true);
-            _renderer.ClearCanvas();
-            
-            foreach (var cmd in _archivedHistory)
-            {
-                cmd.Execute(_renderer, _smoothingService);
-            }
-            
-            _renderer.SetBakingMode(false);
-            
-            RedrawHistory();
-            
-            Debug.Log($"[History] Rebuilt BackBuffer from {_archivedHistory.Count} archived commands.");
-        }
-
-        private void RedrawHistory()
-        {
-            if (_renderer == null) return;
-
-            // 1. Determine start state
-            int startIndex = 0;
-            bool fullClear = false;
-
-            // Check if we have a ClearCanvasCommand in history
-            for (int i = _history.Count - 1; i >= 0; i--)
-            {
-                if (_history[i] is ClearCanvasCommand)
-                {
-                    startIndex = i;
-                    fullClear = true;
-                    break;
-                }
-            }
-
-            // 2. Prepare Canvas
-            if (fullClear)
-            {
-                _renderer.ClearCanvas();
-            }
-            else
-            {
-                _renderer.RestoreFromBackBuffer();
-            }
-            
-            // 3. Replay commands
-            for (int i = startIndex; i < _history.Count; i++)
-            {
-                _history[i].Execute(_renderer, _smoothingService);
-            }
+            // Implementation moved to VisualDrawingHistoryManager
         }
     }
 }

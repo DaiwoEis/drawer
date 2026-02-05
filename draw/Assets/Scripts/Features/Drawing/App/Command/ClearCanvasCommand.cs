@@ -1,16 +1,13 @@
-using Features.Drawing.Domain.Interface;
+using Features.Drawing.Domain.Command;
 using Features.Drawing.Service;
+using Features.Drawing.Domain.Interface;
 
 namespace Features.Drawing.App.Command
 {
-    public class ClearCanvasCommand : ICommand
+    public class ClearCanvasCommand : ClearCanvasData, ICommand
     {
-        public string Id { get; } = System.Guid.NewGuid().ToString();
-        public long SequenceId { get; }
-
-        public ClearCanvasCommand(long sequenceId)
+        public ClearCanvasCommand(long sequenceId) : base(System.Guid.NewGuid().ToString(), sequenceId)
         {
-            SequenceId = sequenceId;
         }
 
         public void Execute(IStrokeRenderer renderer, StrokeSmoothingService smoothingService)

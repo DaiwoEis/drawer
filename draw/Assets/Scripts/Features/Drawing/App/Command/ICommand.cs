@@ -2,10 +2,8 @@ using Features.Drawing.Domain.Interface;
 
 namespace Features.Drawing.App.Command
 {
-    public interface ICommand
+    public interface ICommand : ICommandData
     {
-        string Id { get; }
-        long SequenceId { get; }
         void Execute(IStrokeRenderer renderer, Features.Drawing.Service.StrokeSmoothingService smoothingService);
     }
 }
