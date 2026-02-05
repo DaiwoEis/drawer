@@ -72,6 +72,27 @@ namespace Features.Drawing.Presentation
             );
         }
 
+        public void DrawIncremental(List<LogicPoint> points, int index, bool isEraser)
+        {
+            if (_smoothingService == null)
+            {
+                // Fallback: just draw the point at index if possible, or do nothing?
+                // DrawPoints takes IEnumerable, we can wrap it.
+                if (index >= 0 && index < points.Count)
+                {
+                    DrawPoints(new LogicPoint[] { points[index] });
+                }
+                return;
+            }
+
+            StrokeDrawHelper.DrawIncremental(
+                new StrokeDrawContext(this, _smoothingService),
+                points,
+                index,
+                isEraser
+            );
+        }
+
         // Base class handles: _brushMaterial, _cmd, _quadMesh, _props
 
         // Interpolation Logic Delegated to Generator

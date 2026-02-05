@@ -11,6 +11,7 @@ namespace Features.Drawing.Domain.Interface
         void SetBrushColor(Color color);
         void SetEraser(bool isEraser);
         void DrawStroke(List<LogicPoint> points, bool isEraser);
+        void DrawIncremental(List<LogicPoint> points, int index, bool isEraser);
         void DrawPoints(IEnumerable<LogicPoint> points);
         void EndStroke();
         void ClearCanvas();

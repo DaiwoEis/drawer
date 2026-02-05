@@ -59,7 +59,6 @@ namespace Features.Drawing.App
         
         // Services
         private IStrokeRenderer _renderer;
-        private StrokeSmoothingService _smoothingService;
         private VisualDrawingHistoryManager _historyManager;
 
         // Buffers
@@ -637,8 +636,7 @@ namespace Features.Drawing.App
             {
                 _sessionContext.AddPoint(point);
                 
-                StrokeDrawHelper.DrawIncremental(
-                    new StrokeDrawContext(_renderer, _smoothingService),
+                _renderer.DrawIncremental(
                     _sessionContext.RawPoints,
                     _sessionContext.RawPoints.Count - 1,
                     _inputState.IsEraser
