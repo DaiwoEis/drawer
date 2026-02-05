@@ -57,7 +57,6 @@ namespace Features.Drawing.App
 
         // Buffers
         private List<LogicPoint> _currentStrokeRaw = new List<LogicPoint>(1024);
-        private List<LogicPoint> _singlePointBuffer = new List<LogicPoint>(1);
         private readonly LogicPoint[] _singlePointArray = new LogicPoint[1];
 
         // Current stroke state capturing
@@ -663,12 +662,10 @@ namespace Features.Drawing.App
             }
 
             StrokeDrawHelper.DrawIncremental(
-                _renderer,
-                _smoothingService,
+                new StrokeDrawContext(_renderer, _smoothingService),
                 _currentStrokeRaw,
                 _currentStrokeRaw.Count - 1,
-                _inputState.IsEraser,
-                _singlePointBuffer
+                _inputState.IsEraser
             );
         }
 

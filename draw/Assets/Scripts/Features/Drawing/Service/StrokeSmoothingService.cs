@@ -16,9 +16,11 @@ namespace Features.Drawing.Service
 
         private readonly List<LogicPoint> _controlPoints = new List<LogicPoint>(8);
         private readonly List<LogicPoint> _outputBuffer = new List<LogicPoint>(64);
+        private readonly List<LogicPoint> _singlePointBuffer = new List<LogicPoint>(1);
 
         public List<LogicPoint> ControlPoints => _controlPoints;
         public List<LogicPoint> OutputBuffer => _outputBuffer;
+        public List<LogicPoint> SinglePointBuffer => _singlePointBuffer;
 
         /// <summary>
         /// Generates smoothed LogicPoints from the internal control points buffer.

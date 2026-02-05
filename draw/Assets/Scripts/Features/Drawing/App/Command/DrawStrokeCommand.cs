@@ -17,7 +17,6 @@ namespace Features.Drawing.App.Command
         private readonly Color _color;
         private readonly float _size;
         private readonly bool _isEraser;
-        private readonly List<LogicPoint> _singlePointBuffer;
 
         public DrawStrokeCommand(string id, long sequenceId, List<LogicPoint> points, BrushStrategy strategy, Texture2D runtimeTexture, Color color, float size, bool isEraser)
         {
@@ -29,7 +28,6 @@ namespace Features.Drawing.App.Command
             _color = color;
             _size = size;
             _isEraser = isEraser;
-            _singlePointBuffer = new List<LogicPoint>(1);
         }
 
         public void Execute(IStrokeRenderer renderer, StrokeSmoothingService smoothingService)
@@ -59,11 +57,9 @@ namespace Features.Drawing.App.Command
         private void DrawStrokePoints(IStrokeRenderer renderer, StrokeSmoothingService smoothingService)
         {
             StrokeDrawHelper.DrawFullStroke(
-                renderer,
-                smoothingService,
+                new StrokeDrawContext(renderer, smoothingService),
                 _points,
-                _isEraser,
-                _singlePointBuffer
+                _isEraser
             );
         }
     }
