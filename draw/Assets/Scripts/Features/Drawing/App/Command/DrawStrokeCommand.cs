@@ -17,8 +17,6 @@ namespace Features.Drawing.App.Command
         private readonly Color _color;
         private readonly float _size;
         private readonly bool _isEraser;
-        private readonly List<LogicPoint> _smoothingInputBuffer;
-        private readonly List<LogicPoint> _smoothingOutputBuffer;
         private readonly List<LogicPoint> _singlePointBuffer;
 
         public DrawStrokeCommand(string id, long sequenceId, List<LogicPoint> points, BrushStrategy strategy, Texture2D runtimeTexture, Color color, float size, bool isEraser)
@@ -31,8 +29,6 @@ namespace Features.Drawing.App.Command
             _color = color;
             _size = size;
             _isEraser = isEraser;
-            _smoothingInputBuffer = new List<LogicPoint>(4);
-            _smoothingOutputBuffer = new List<LogicPoint>(64);
             _singlePointBuffer = new List<LogicPoint>(1);
         }
 
@@ -67,8 +63,6 @@ namespace Features.Drawing.App.Command
                 smoothingService,
                 _points,
                 _isEraser,
-                _smoothingInputBuffer,
-                _smoothingOutputBuffer,
                 _singlePointBuffer
             );
         }

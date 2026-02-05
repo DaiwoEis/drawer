@@ -14,20 +14,23 @@ namespace Features.Drawing.Service
         private const int MaxStepsPerSegment = 8;
         private const float StepsPerNormalizedUnit = 64f;
 
-        /// <summary>
-        /// Generates smoothed LogicPoints from a sequence of control points.
-        /// Writes result into the provided output buffer to avoid GC.
-        /// </summary>
-        /// <param name="controlPoints">Input control points (window)</param>
-        /// <param name="outputBuffer">Buffer to write smoothed points into</param>
-        public void SmoothPoints(List<LogicPoint> controlPoints, List<LogicPoint> outputBuffer)
-        {
-            if (outputBuffer == null) return;
-            outputBuffer.Clear();
+        private readonly List<LogicPoint> _controlPoints = new List<LogicPoint>(8);
+        private readonly List<LogicPoint> _outputBuffer = new List<LogicPoint>(64);
 
-            if (controlPoints == null || controlPoints.Count < 3)
+        public List<LogicPoint> ControlPoints => _controlPoints;
+        public List<LogicPoint> OutputBuffer => _outputBuffer;
+
+        /// <summary>
+        /// Generates smoothed LogicPoints from the internal control points buffer.
+        /// Writes result into the internal output buffer to avoid GC.
+        /// </summary>
+        public void SmoothPoints()
+        {
+            _outputBuffer.Clear();
+
+            if (_controlPoints.Count < 3)
             {
-                if (controlPoints != null) outputBuffer.AddRange(controlPoints);
+                _outputBuffer.AddRange(_controlPoints);
                 return;
             }
             
@@ -35,28 +38,21 @@ namespace Features.Drawing.Service
             // If less, we might need to duplicate start/end points.
             // Simplified logic here for MVP.
             
-            for (int i = 0; i < controlPoints.Count - 3; i++)
+            for (int i = 0; i < _controlPoints.Count - 3; i++)
             {
-                LogicPoint p0 = controlPoints[i];
-                LogicPoint p1 = controlPoints[i + 1];
-                LogicPoint p2 = controlPoints[i + 2];
-                LogicPoint p3 = controlPoints[i + 3];
+                LogicPoint p0 = _controlPoints[i];
+                LogicPoint p1 = _controlPoints[i + 1];
+                LogicPoint p2 = _controlPoints[i + 2];
+                LogicPoint p3 = _controlPoints[i + 3];
 
                 int steps = GetSteps(p1, p2);
                 for (int t = 0; t < steps; t++)
                 {
                     float tNorm = t / (float)steps;
                     LogicPoint interpolated = CatmullRom(p0, p1, p2, p3, tNorm);
-                    outputBuffer.Add(interpolated);
+                    _outputBuffer.Add(interpolated);
                 }
             }
-            
-            // Ensure the last control point of the curve segment (p2) is added
-            // Note: Catmull-Rom from p1 to p2. p2 is reached when t=1 (which is start of next segment)
-            // but we only loop t < steps. So we might miss p2 if we don't handle end correctly.
-            // For continuous streaming, we don't add the very last point yet unless it's the end of stroke.
-            // But here we are just smoothing a window.
-            // outputBuffer.Add(controlPoints[controlPoints.Count - 2]); 
         }
 
         private LogicPoint CatmullRom(LogicPoint p0, LogicPoint p1, LogicPoint p2, LogicPoint p3, float t)

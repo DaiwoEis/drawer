@@ -57,8 +57,6 @@ namespace Features.Drawing.App
 
         // Buffers
         private List<LogicPoint> _currentStrokeRaw = new List<LogicPoint>(1024);
-        private List<LogicPoint> _smoothingInputBuffer = new List<LogicPoint>(8);
-        private List<LogicPoint> _smoothingOutputBuffer = new List<LogicPoint>(64);
         private List<LogicPoint> _singlePointBuffer = new List<LogicPoint>(1);
         private readonly LogicPoint[] _singlePointArray = new LogicPoint[1];
 
@@ -670,8 +668,6 @@ namespace Features.Drawing.App
                 _currentStrokeRaw,
                 _currentStrokeRaw.Count - 1,
                 _inputState.IsEraser,
-                _smoothingInputBuffer,
-                _smoothingOutputBuffer,
                 _singlePointBuffer
             );
         }

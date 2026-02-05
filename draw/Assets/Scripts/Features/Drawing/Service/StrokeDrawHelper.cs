@@ -20,22 +20,21 @@ namespace Features.Drawing.Service
             IList<LogicPoint> points,
             int currentIndex,
             bool isEraser,
-            List<LogicPoint> smoothingInputBuffer,
-            List<LogicPoint> smoothingOutputBuffer,
             List<LogicPoint> singlePointBuffer)
         {
             int count = currentIndex + 1;
 
             if (count >= 4)
             {
-                smoothingInputBuffer.Clear();
-                smoothingInputBuffer.Add(points[currentIndex - 3]);
-                smoothingInputBuffer.Add(points[currentIndex - 2]);
-                smoothingInputBuffer.Add(points[currentIndex - 1]);
-                smoothingInputBuffer.Add(points[currentIndex]);
+                var input = smoothingService.ControlPoints;
+                input.Clear();
+                input.Add(points[currentIndex - 3]);
+                input.Add(points[currentIndex - 2]);
+                input.Add(points[currentIndex - 1]);
+                input.Add(points[currentIndex]);
 
-                smoothingService.SmoothPoints(smoothingInputBuffer, smoothingOutputBuffer);
-                renderer.DrawPoints(smoothingOutputBuffer);
+                smoothingService.SmoothPoints();
+                renderer.DrawPoints(smoothingService.OutputBuffer);
             }
             else if (isEraser)
             {
@@ -54,8 +53,6 @@ namespace Features.Drawing.Service
             StrokeSmoothingService smoothingService,
             List<LogicPoint> points,
             bool isEraser,
-            List<LogicPoint> smoothingInputBuffer,
-            List<LogicPoint> smoothingOutputBuffer,
             List<LogicPoint> singlePointBuffer)
         {
             if (points == null || points.Count == 0) return;
@@ -75,8 +72,6 @@ namespace Features.Drawing.Service
                     points, 
                     i, 
                     isEraser, 
-                    smoothingInputBuffer, 
-                    smoothingOutputBuffer, 
                     singlePointBuffer
                 );
             }
