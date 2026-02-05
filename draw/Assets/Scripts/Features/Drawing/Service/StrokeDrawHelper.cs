@@ -38,7 +38,7 @@ namespace Features.Drawing.Service
             }
             else if (isEraser)
             {
-                var buffer = context.SmoothingService.SinglePointBuffer;
+                var buffer = SharedDrawBuffers.SinglePointBuffer;
                 buffer.Clear();
                 buffer.Add(points[currentIndex]);
                 context.Renderer.DrawPoints(buffer);

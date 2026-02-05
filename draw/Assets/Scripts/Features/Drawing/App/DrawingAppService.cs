@@ -52,12 +52,10 @@ namespace Features.Drawing.App
         
         // Services
         private IStrokeRenderer _renderer;
-        private StrokeSmoothingService _smoothingService;
         private DrawingHistoryManager _historyManager;
 
         // Buffers
         private List<LogicPoint> _currentStrokeRaw = new List<LogicPoint>(1024);
-        private readonly LogicPoint[] _singlePointArray = new LogicPoint[1];
 
         // Current stroke state capturing
         private StrokeEntity _currentStroke;
@@ -156,15 +154,14 @@ namespace Features.Drawing.App
             if (_logger == null) _logger = logger;
 
             // Lazy init services if not provided
-            if (_smoothingService == null) 
-                _smoothingService = smoothingService ?? new StrokeSmoothingService();
+            var effectiveSmoothingService = smoothingService ?? new StrokeSmoothingService();
                 
             if (_collisionService == null) 
                 _collisionService = collisionService ?? new StrokeCollisionService();
             
             // HistoryManager depends on others
             if (_historyManager == null) 
-                _historyManager = historyManager ?? new DrawingHistoryManager(_renderer, _smoothingService, _collisionService);
+                _historyManager = historyManager ?? new DrawingHistoryManager(_renderer, effectiveSmoothingService, _collisionService);
 
             // Init State Manager
             _inputState = new InputStateManager(_renderer, _eraserStrategy);
@@ -250,7 +247,7 @@ namespace Features.Drawing.App
             var cmd = new ClearCanvasCommand(_nextSequenceId++);
             
             // Execute immediately
-            cmd.Execute(_renderer, _smoothingService);
+            cmd.Execute(_renderer, _historyManager.SmoothingService);
             
             // Add to history
             _historyManager.AddCommand(cmd);
@@ -656,13 +653,15 @@ namespace Features.Drawing.App
             
             if (_currentStroke != null)
             {
-                // Optimization: Use pre-allocated array to avoid GC allocation per point
-                _singlePointArray[0] = point;
-                _currentStroke.AddPoints(_singlePointArray);
+                // Optimization: Use shared buffer from service to avoid GC allocation per point
+                var buffer = SharedDrawBuffers.SinglePointBuffer;
+                buffer.Clear();
+                buffer.Add(point);
+                _currentStroke.AddPoints(buffer);
             }
 
             StrokeDrawHelper.DrawIncremental(
-                new StrokeDrawContext(_renderer, _smoothingService),
+                new StrokeDrawContext(_renderer, _historyManager.SmoothingService),
                 _currentStrokeRaw,
                 _currentStrokeRaw.Count - 1,
                 _inputState.IsEraser
@@ -739,7 +738,7 @@ namespace Features.Drawing.App
             );
             
             // Execute (Draws it)
-            cmd.Execute(_renderer, _smoothingService);
+            cmd.Execute(_renderer, _historyManager.SmoothingService);
             
             // Add to history
             _historyManager.AddCommand(cmd);

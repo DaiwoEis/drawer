@@ -41,6 +41,7 @@ namespace Features.Drawing.Service
         public HashSet<string> ActiveStrokeIds => _activeStrokeIds;
         public bool CanUndo => _history.Count > 0;
         public bool CanRedo => _redoHistory.Count > 0;
+        public StrokeSmoothingService SmoothingService => _smoothingService;
 
         /// <summary>
         /// Adds a command to history and handles sliding window/baking.
