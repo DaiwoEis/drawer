@@ -7,6 +7,7 @@ using Features.Drawing.Domain;
 using Features.Drawing.Domain.ValueObject;
 using Common.Constants;
 using Features.Drawing.App;
+using Features.Drawing.Service;
 
 namespace Features.Drawing.Presentation
 {
@@ -49,6 +50,27 @@ namespace Features.Drawing.Presentation
 
         // RenderTextures managed by CanvasLayoutController
         private bool _isBaking = false;
+        private StrokeSmoothingService _smoothingService;
+
+        public void SetSmoothingService(StrokeSmoothingService service)
+        {
+            _smoothingService = service;
+        }
+
+        public void DrawStroke(List<LogicPoint> points, bool isEraser)
+        {
+            if (_smoothingService == null)
+            {
+                DrawPoints(points);
+                return;
+            }
+
+            StrokeDrawHelper.DrawFullStroke(
+                new StrokeDrawContext(this, _smoothingService),
+                points,
+                isEraser
+            );
+        }
 
         // Base class handles: _brushMaterial, _cmd, _quadMesh, _props
 

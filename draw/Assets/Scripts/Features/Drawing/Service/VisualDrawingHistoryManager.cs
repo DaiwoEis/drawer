@@ -13,17 +13,10 @@ namespace Features.Drawing.Service
     public class VisualDrawingHistoryManager : DrawingHistoryManager
     {
         private readonly IStrokeRenderer _renderer;
-        private readonly StrokeSmoothingService _smoothingService;
 
-        public StrokeSmoothingService SmoothingService => _smoothingService;
-
-        public VisualDrawingHistoryManager(
-            IStrokeRenderer renderer,
-            StrokeSmoothingService smoothingService,
-            StrokeCollisionService collisionService) : base(collisionService)
+        public VisualDrawingHistoryManager(IStrokeRenderer renderer) : base()
         {
             _renderer = renderer;
-            _smoothingService = smoothingService;
         }
 
         public override void AddCommand(ICommand cmd)
@@ -68,7 +61,7 @@ namespace Features.Drawing.Service
             if (_renderer != null)
             {
                 _renderer.SetBakingMode(true);
-                cmd.Execute(_renderer, _smoothingService);
+                cmd.Execute(_renderer);
                 _renderer.SetBakingMode(false);
             }
         }
@@ -87,7 +80,7 @@ namespace Features.Drawing.Service
             
             foreach (var cmd in ArchivedHistory)
             {
-                cmd.Execute(_renderer, _smoothingService);
+                cmd.Execute(_renderer);
             }
             
             _renderer.SetBakingMode(false);
@@ -117,7 +110,7 @@ namespace Features.Drawing.Service
         // Helper for ReplaceHistory override
         protected override void ExecuteCommandVisual(ICommand cmd)
         {
-            cmd.Execute(_renderer, _smoothingService);
+            cmd.Execute(_renderer);
         }
 
         private void RedrawHistory()
@@ -154,7 +147,7 @@ namespace Features.Drawing.Service
             // 3. Replay commands
             for (int i = startIndex; i < history.Count; i++)
             {
-                history[i].Execute(_renderer, _smoothingService);
+                history[i].Execute(_renderer);
             }
         }
     }

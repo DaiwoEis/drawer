@@ -59,6 +59,7 @@ namespace Features.Drawing.App
         
         // Services
         private IStrokeRenderer _renderer;
+        private StrokeSmoothingService _smoothingService;
         private VisualDrawingHistoryManager _historyManager;
 
         // Buffers
@@ -162,13 +163,19 @@ namespace Features.Drawing.App
 
             // Lazy init services if not provided
             var effectiveSmoothingService = smoothingService ?? new StrokeSmoothingService();
-                
+            
+            // Inject SmoothingService into Renderer if it's CanvasRenderer
+            if (_renderer is Features.Drawing.Presentation.CanvasRenderer cr)
+            {
+                cr.SetSmoothingService(effectiveSmoothingService);
+            }
+
             if (_collisionService == null) 
                 _collisionService = collisionService ?? new StrokeCollisionService();
             
             // HistoryManager depends on others
             if (_historyManager == null) 
-                _historyManager = historyManager ?? new VisualDrawingHistoryManager(_renderer, effectiveSmoothingService, _collisionService);
+                _historyManager = historyManager ?? new VisualDrawingHistoryManager(_renderer);
 
             // Init State Manager
             _inputState = new InputStateManager(_renderer, _eraserStrategy);
@@ -222,7 +229,11 @@ namespace Features.Drawing.App
         /// Replaces the current local history with a remote authoritative history.
         /// This is a "Stop the World" full sync operation.
         /// </summary>
-        public void ReplaceHistory(List<ICommand> remoteHistory) => _historyManager.ReplaceHistory(remoteHistory);
+        public void ReplaceHistory(List<ICommand> remoteHistory)
+        {
+            _collisionService?.Clear();
+            _historyManager.ReplaceHistory(remoteHistory);
+        }
 
         /// <summary>
         /// Generates a lightweight checksum (hash) of the current history state.
@@ -263,7 +274,7 @@ namespace Features.Drawing.App
             var cmd = new ClearCanvasCommand(_sessionContext.GetNextSequenceId());
             
             // Execute immediately
-            cmd.Execute(_renderer, _historyManager.SmoothingService);
+            cmd.Execute(_renderer);
             
             // Add to history
             _historyManager.AddCommand(cmd);
@@ -627,7 +638,7 @@ namespace Features.Drawing.App
                 _sessionContext.AddPoint(point);
                 
                 StrokeDrawHelper.DrawIncremental(
-                    new StrokeDrawContext(_renderer, _historyManager.SmoothingService),
+                    new StrokeDrawContext(_renderer, _smoothingService),
                     _sessionContext.RawPoints,
                     _sessionContext.RawPoints.Count - 1,
                     _inputState.IsEraser

@@ -91,7 +91,7 @@ namespace Features.Drawing.Service.Network
             // Execute (Draws it)
             if (_historyManager != null)
             {
-                cmd.Execute(_renderer, _historyManager.SmoothingService);
+                cmd.Execute(_renderer);
                 _historyManager.AddCommand(cmd);
             }
             

@@ -10,7 +10,7 @@ namespace Features.Drawing.App.Command
         {
         }
 
-        public void Execute(IStrokeRenderer renderer, StrokeSmoothingService smoothingService)
+        public void Execute(IStrokeRenderer renderer)
         {
             renderer.ClearCanvas();
         }

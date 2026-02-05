@@ -10,6 +10,7 @@ namespace Features.Drawing.Domain.Interface
         void SetBrushSize(float size);
         void SetBrushColor(Color color);
         void SetEraser(bool isEraser);
+        void DrawStroke(List<LogicPoint> points, bool isEraser);
         void DrawPoints(IEnumerable<LogicPoint> points);
         void EndStroke();
         void ClearCanvas();

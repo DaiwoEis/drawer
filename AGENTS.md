@@ -1,3 +1,5 @@
+必须强制用中文回答
+
 # Drawer Project - AI Developer Handbook
 
 > **Role Definition**: This document serves as the primary source of truth for AI Agents (and human developers) working on the Drawer project. It defines the architectural constraints, core concepts, and coding standards that **MUST** be followed to maintain system integrity.
@@ -186,3 +188,5 @@ When generating or modifying code, you **MUST** adhere to these rules:
 ### 7.2 Logs & Monitoring
 *   **Local**: Check Unity Console for `[PerformanceHeartbeat]`.
 *   **Production**: Ensure `StructuredLogger` is connected to a persistent sink (File/Network).
+
+必须强制用中文回答

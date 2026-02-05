@@ -20,12 +20,8 @@ namespace Features.Drawing.Service
         // Tracks IDs of currently active strokes (history + archived)
         private HashSet<string> _activeStrokeIds = new HashSet<string>();
 
-        // Dependencies
-        private readonly StrokeCollisionService _collisionService;
-
-        public DrawingHistoryManager(StrokeCollisionService collisionService)
+        public DrawingHistoryManager()
         {
-            _collisionService = collisionService;
         }
 
         // Public Accessors
@@ -180,7 +176,7 @@ namespace Features.Drawing.Service
             _history.Clear();
             _redoHistory.Clear();
             _archivedHistory.Clear();
-            _collisionService.Clear();
+            // Collision service clear must be handled by caller or subclass
             _activeStrokeIds.Clear();
             
             // Subclass hook for clearing visual state is handled by overriding this method or hook?

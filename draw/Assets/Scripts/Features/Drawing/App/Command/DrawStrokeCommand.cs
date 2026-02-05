@@ -21,7 +21,7 @@ namespace Features.Drawing.App.Command
             _runtimeTexture = runtimeTexture;
         }
 
-        public void Execute(IStrokeRenderer renderer, StrokeSmoothingService smoothingService)
+        public void Execute(IStrokeRenderer renderer)
         {
             if (IsEraser)
             {
@@ -41,17 +41,8 @@ namespace Features.Drawing.App.Command
                 renderer.SetBrushSize(Size);
             }
 
-            DrawStrokePoints(renderer, smoothingService);
+            renderer.DrawStroke(Points, IsEraser);
             renderer.EndStroke();
-        }
-
-        private void DrawStrokePoints(IStrokeRenderer renderer, StrokeSmoothingService smoothingService)
-        {
-            StrokeDrawHelper.DrawFullStroke(
-                new StrokeDrawContext(renderer, smoothingService),
-                Points,
-                IsEraser
-            );
         }
     }
 }
