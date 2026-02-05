@@ -53,8 +53,13 @@ namespace Tests.Service
         }
 
         [Test]
-        public void IsEraserStrokeEffective_ShouldReturnFalse_WhenTouchingInk_ButObscuredByLaterEraser()
+        public void IsEraserStrokeEffective_ShouldReturnTrue_EvenIfTouchingInkIsObscured()
         {
+            // FIX: We changed the behavior to ALWAYS return true if it touches ink,
+            // regardless of whether that ink is technically covered by another eraser.
+            // This is to prevent false negatives where the "point-based" obscurity check
+            // fails to account for eraser radius/edges.
+            
             // Arrange
             // Ink (ID 1, Seq 1)
             var ink = CreateStroke(1, 1, new List<LogicPoint> { new LogicPoint(100, 100, 128) }, 10, 1);
@@ -70,19 +75,40 @@ namespace Tests.Service
             var newEraser = CreateStroke(3, DrawingConstants.ERASER_BRUSH_ID, new List<LogicPoint> { new LogicPoint(100, 100, 128) }, 10, 3);
 
             // Act
-            // Should be false because ink is already covered by Eraser 2 (Seq 2 > Ink Seq 1)
-            // Wait, the logic is: Is THIS eraser stroke effective?
-            // Yes, if it touches ink that is NOT covered by a *newer* eraser.
-            // But here the existing eraser (2) is *older* than the current eraser (3) but *newer* than the ink (1).
-            // Logic in Service:
-            // "Check if point touches ink... then check if it is obscured by any EXISTING eraser that is NEWER than the ink."
-            // Existing eraser 2 is newer than ink 1. So ink 1 is obscured at this point.
-            // So current eraser 3 should be redundant (effective=false).
-            
             bool result = _service.IsEraserStrokeEffective(newEraser, activeIds);
 
             // Assert
-            Assert.IsFalse(result);
+            Assert.IsTrue(result, "Should be True because we removed the aggressive obscurity optimization");
+        }
+
+        [Test]
+        public void IsEraserStrokeEffective_ShouldCatchFastStroke_WithSparsePoints()
+        {
+            // Test for Stride Optimization Bug (User Issue)
+            // Scenario: Eraser has points P0..P10. Ink is only near P3.
+            // If Stride is 5 (checking P0, P5, P10), it will miss P3.
+            
+            // Arrange
+            // Ink at (100, 100)
+            var ink = CreateStroke(1, 1, new List<LogicPoint> { new LogicPoint(100, 100, 128) }, 10, 1);
+            _service.Insert(ink);
+            var activeIds = new HashSet<string> { "1" };
+
+            // Eraser points. P3 is at (100,100). Others are far away.
+            var points = new List<LogicPoint>();
+            for (int i = 0; i <= 10; i++)
+            {
+                if (i == 3) points.Add(new LogicPoint(100, 100, 128)); // Hit
+                else points.Add(new LogicPoint((ushort)(200 + i * 10), 200, 128)); // Miss
+            }
+            
+            var eraser = CreateStroke(2, DrawingConstants.ERASER_BRUSH_ID, points, 10, 2);
+
+            // Act
+            bool result = _service.IsEraserStrokeEffective(eraser, activeIds);
+
+            // Assert
+            Assert.IsTrue(result, "Eraser should detect ink even if the hit is at index 3 (skipped by stride 5)");
         }
 
         private StrokeEntity CreateStroke(uint id, ushort brushId, List<LogicPoint> points, float size, long seq = 0)

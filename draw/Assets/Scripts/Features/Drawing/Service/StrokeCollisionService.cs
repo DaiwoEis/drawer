@@ -73,7 +73,7 @@ namespace Features.Drawing.Service
             float eraserRadius = eraserStroke.Size * 0.5f;
 
             // Iterate over sample points of the current eraser
-            int stride = 5; // Optimization: Check every 5th point
+            int stride = 1; // FIX: Check every point to avoid false negatives (eraser visual but not logical)
             for (int i = 0; i < eraserStroke.Points.Count; i += stride)
             {
                 var p = eraserStroke.Points[i];
@@ -88,33 +88,13 @@ namespace Features.Drawing.Service
                     if (distToInkSqr < inkThreshold * inkThreshold)
                     {
                         // This point touches this ink.
-                        // Now check if it is obscured by any EXISTING eraser that is NEWER than the ink.
-                        bool isObscured = false;
-
-                        foreach (var existingEraser in erasers)
-                        {
-                            // Only check erasers that came AFTER the ink (and thus could cover it)
-                            // AND exclude the current eraser itself
-                            if (existingEraser.SequenceId > ink.SequenceId && existingEraser.Id != eraserStroke.Id)
-                            {
-                                // Check if point p is covered by existingEraser
-                                // Use strict threshold (actual size) for covering check
-                                float coverThreshold = (existingEraser.Size * 0.5f) * scale;
-                                float distToEraserSqr = SqrDistancePointStroke(p, existingEraser);
-
-                                if (distToEraserSqr < coverThreshold * coverThreshold)
-                                {
-                                    isObscured = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (!isObscured)
-                        {
-                            // Found at least one point that touches ink and is NOT obscured.
-                            return true;
-                        }
+                        // FIX: Removed obscurity check. 
+                        // The previous logic checked if the eraser center point was covered by a newer eraser.
+                        // However, this caused false positives (discarding valid strokes) because:
+                        // 1. The eraser has a radius, so even if the center is covered, the edges might hit ink.
+                        // 2. Visual rendering is continuous, but logic is discrete points.
+                        // It is safer to allow potentially redundant eraser strokes than to discard valid ones (which breaks Undo).
+                        return true;
                     }
                 }
             }
