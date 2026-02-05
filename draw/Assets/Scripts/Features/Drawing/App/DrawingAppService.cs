@@ -15,6 +15,8 @@ using Features.Drawing.App.Interface;
 using Features.Drawing.App.State;
 using Common.Diagnostics;
 
+using Features.Drawing.Domain.Context;
+
 namespace Features.Drawing.App
 {
     /// <summary>
@@ -38,6 +40,7 @@ namespace Features.Drawing.App
 
         // State Management
         private InputStateManager _inputState;
+        private DrawingSessionContext _sessionContext = new DrawingSessionContext();
         
         // Public Accessors for UI/Preview
         public bool IsEraser => _inputState?.IsEraser ?? false;
@@ -47,7 +50,7 @@ namespace Features.Drawing.App
         // Optimization State
         private LogicPoint _lastAddedPoint;
         private Vector2 _currentStabilizedPos;
-        private long _nextSequenceId = 1;
+        // _nextSequenceId moved to DrawingSessionContext
 
         
         // Services
@@ -55,10 +58,10 @@ namespace Features.Drawing.App
         private VisualDrawingHistoryManager _historyManager;
 
         // Buffers
-        private List<LogicPoint> _currentStrokeRaw = new List<LogicPoint>(1024);
+        // _currentStrokeRaw moved to DrawingSessionContext
 
         // Current stroke state capturing
-        private StrokeEntity _currentStroke;
+        // _currentStroke moved to DrawingSessionContext
 
         private StrokeCollisionService _collisionService;
         
@@ -244,7 +247,7 @@ namespace Features.Drawing.App
         public void ClearCanvas()
         {
             // Create a clear command
-            var cmd = new ClearCanvasCommand(_nextSequenceId++);
+            var cmd = new ClearCanvasCommand(_sessionContext.GetNextSequenceId());
             
             // Execute immediately
             cmd.Execute(_renderer, _historyManager.SmoothingService);
@@ -280,17 +283,14 @@ namespace Features.Drawing.App
             // CRITICAL FIX: Force sync Renderer state with Service state.
             _inputState.SyncToRenderer();
 
-            _currentStrokeRaw.Clear();
-
             // Create Domain Entity
             uint id = (uint)Random.Range(0, int.MaxValue); // Simple random ID
-            uint seed = (uint)Random.Range(0, int.MaxValue);
             uint colorInt = ColorToUInt(_inputState.CurrentColor);
             
             // Resolve Brush ID
             ushort brushId = GetBrushId(_inputState.CurrentStrategy);
             
-            _currentStroke = new StrokeEntity(id, 0, brushId, seed, colorInt, _inputState.CurrentSize, _nextSequenceId++);
+            _sessionContext.StartStroke(id, brushId, colorInt, _inputState.CurrentSize);
 
             // Network Sync: Begin Stroke
             if (_networkService != null && _networkService.isActiveAndEnabled)
@@ -377,9 +377,9 @@ namespace Features.Drawing.App
             _lastAddedPoint = pointToAdd;
             
             // Log every 10th point or if distance is large? Just log count.
-            if (_enableDiagnostics && _currentStrokeRaw.Count % 10 == 0)
+            if (_enableDiagnostics && _sessionContext.RawPoints.Count % 10 == 0)
             {
-                 Debug.Log($"[App] MoveStroke ID:{_currentStroke?.Id} Count:{_currentStrokeRaw.Count} Last:{pointToAdd}");
+                 Debug.Log($"[App] MoveStroke ID:{_sessionContext.CurrentStroke?.Id} Count:{_sessionContext.RawPoints.Count} Last:{pointToAdd}");
             }
 
             // Network Sync: Move Stroke
@@ -389,19 +389,37 @@ namespace Features.Drawing.App
             }
         }
 
-        public void EndStroke()
+        public void EndStroke(LogicPoint endPoint)
         {
-            if (_currentStroke == null) return;
-            
-            _currentStroke.EndStroke();
+            if (!_sessionContext.IsDrawing) return;
+            AddPoint(endPoint);
 
-            int pointCount = _currentStroke.Points.Count;
-            if (!_inputState.IsEraser && pointCount > 0 && pointCount < 4)
+            // Network Sync: Ensure the last point is sent
+            if (_networkService != null && _networkService.isActiveAndEnabled)
             {
-                _renderer.DrawPoints(_currentStroke.Points);
+                _networkService.OnLocalStrokeMoved(endPoint);
             }
 
-            if (_enableDiagnostics) Debug.Log($"[App] EndStroke ID:{_currentStroke.Id} Points:{pointCount}");
+            EndStroke();
+        }
+
+        public void EndStroke()
+        {
+            if (!_sessionContext.IsDrawing) return;
+
+            // 1. Finish Renderer
+            _renderer.EndStroke();
+            
+            // 2. Finalize Stroke Entity
+            var stroke = _sessionContext.EndStroke();
+
+            int pointCount = stroke.Points.Count;
+            if (!_inputState.IsEraser && pointCount > 0 && pointCount < 4)
+            {
+                _renderer.DrawPoints(stroke.Points);
+            }
+
+            if (_enableDiagnostics) Debug.Log($"[App] EndStroke ID:{stroke.Id} Points:{pointCount}");
 
             // FIX: Don't add empty strokes to history
             if (pointCount > 0)
@@ -409,62 +427,62 @@ namespace Features.Drawing.App
                 // OPTIMIZATION: Discard eraser strokes that don't intersect with any existing ink.
                 if (_inputState.IsEraser)
                 {
-                    bool isEffective = _collisionService.IsEraserStrokeEffective(_currentStroke, _historyManager.ActiveStrokeIds);
+                    bool isEffective = _collisionService.IsEraserStrokeEffective(stroke, _historyManager.ActiveStrokeIds);
                     
                     if (!isEffective)
                     {
-                        Debug.Log($"[Optimization] Eraser stroke discarded [ID: {_currentStroke.Id}] - Redundant (covered area or no ink).");
+                        Debug.Log($"[Optimization] Eraser stroke discarded [ID: {stroke.Id}] - Redundant (covered area or no ink).");
                         _renderer.EndStroke();
-                        _currentStroke = null;
                         return;
                     }
                 }
 
                 // Create Command
                 // Note: We copy the points from the domain entity (or raw list).
-                // _currentStroke.Points is List<LogicPoint>.
+                // stroke.Points is List<LogicPoint>.
                 // We pass the current state configuration.
                 
                 // Fix: Eraser should use _eraserStrategy if available
                 var strategyToUse = _inputState.IsEraser ? _eraserStrategy : _inputState.CurrentStrategy;
 
                 var cmd = new DrawStrokeCommand(
-                    _currentStroke.Id.ToString(),
-                    _currentStroke.SequenceId,
-                    new List<LogicPoint>(_currentStroke.Points),
+                    stroke.Id.ToString(),
+                    stroke.SequenceId,
+                    new List<LogicPoint>(stroke.Points),
                     strategyToUse,
                     _inputState.CurrentRuntimeTexture,
                     _inputState.CurrentColor,
-                    _inputState.CurrentSize,
+                    stroke.Size,
                     _inputState.IsEraser
                 );
                 
                 _historyManager.AddCommand(cmd);
                 
                 // Spatial Indexing
-                _collisionService.Insert(_currentStroke);
+                _collisionService.Insert(stroke);
 
                 // Network Sync: End Stroke
                 if (_networkService != null && _networkService.isActiveAndEnabled)
                 {
-                    uint checksum = Features.Drawing.Service.Network.DrawingNetworkService.ComputeStrokeChecksum(_currentStroke.Points);
-                    _networkService.OnLocalStrokeEnded(checksum, _currentStroke.Points.Count);
+                    uint checksum = Features.Drawing.Service.Network.DrawingNetworkService.ComputeStrokeChecksum(stroke.Points);
+                    _networkService.OnLocalStrokeEnded(checksum, stroke.Points.Count);
                 }
             }
             
             // Serialization Check (Debug)
-            // var bytes = StrokeSerializer.Serialize(_currentStroke);
+            // var bytes = StrokeSerializer.Serialize(stroke);
             // Debug.Log($"[Stroke] Ended. Bytes: {bytes.Length}");
             
             _renderer.EndStroke();
-            _currentStroke = null;
+            _activeStrokeTrace = default;
         }
 
         public void ForceEndCurrentStroke()
         {
-            if (_currentStroke != null)
+            if (_sessionContext.IsDrawing)
             {
                 // Force end the current stroke and add it to history
+                // We use the parameterless EndStroke to avoid adding a duplicate point.
                 EndStroke();
             }
         }
@@ -493,15 +511,12 @@ namespace Features.Drawing.App
             }
             
             // 3. Initialize Stroke Entity (Network Source)
-            uint seed = (uint)Random.Range(0, int.MaxValue); // Seed doesn't matter much for resumption as long as consistent? 
-            // Actually, for perfect sync, we might need the original seed, but for now random is okay or passed in metadata.
             uint colorInt = ColorToUInt(color);
             ushort brushId = isEraser ? DrawingConstants.ERASER_BRUSH_ID : (ushort)0;
             
-            _currentStroke = new StrokeEntity(id, 0, brushId, seed, colorInt, size, _nextSequenceId++);
+            _sessionContext.StartStroke(id, brushId, colorInt, size);
 
             // 4. Replay existing points
-            _currentStrokeRaw.Clear();
             _currentStabilizedPos = Vector2.zero; // Reset stabilization
             
             if (existingPoints != null && existingPoints.Count > 0)
@@ -524,11 +539,12 @@ namespace Features.Drawing.App
             if (_renderer == null || points == null || points.Count == 0) return;
 
             // 1. Update Domain State
-            _currentStrokeRaw.AddRange(points);
-            
-            if (_currentStroke != null)
+            if (_sessionContext.IsDrawing)
             {
-                _currentStroke.AddPoints(points);
+                foreach (var p in points)
+                {
+                    _sessionContext.AddPoint(p);
+                }
             }
 
             // 2. Render Batch
@@ -647,25 +663,17 @@ namespace Features.Drawing.App
 
         private void AddPoint(LogicPoint point)
         {
-            if (_renderer == null) return;
-
-            _currentStrokeRaw.Add(point);
-            
-            if (_currentStroke != null)
+            if (_sessionContext.IsDrawing)
             {
-                // Optimization: Use shared buffer from service to avoid GC allocation per point
-                var buffer = SharedDrawBuffers.SinglePointBuffer;
-                buffer.Clear();
-                buffer.Add(point);
-                _currentStroke.AddPoints(buffer);
+                _sessionContext.AddPoint(point);
+                
+                StrokeDrawHelper.DrawIncremental(
+                    new StrokeDrawContext(_renderer, _historyManager.SmoothingService),
+                    _sessionContext.RawPoints,
+                    _sessionContext.RawPoints.Count - 1,
+                    _inputState.IsEraser
+                );
             }
-
-            StrokeDrawHelper.DrawIncremental(
-                new StrokeDrawContext(_renderer, _historyManager.SmoothingService),
-                _currentStrokeRaw,
-                _currentStrokeRaw.Count - 1,
-                _inputState.IsEraser
-            );
         }
 
         // --- Network Sync Helpers (Proposed) ---

@@ -44,6 +44,12 @@ namespace Features.Drawing.Domain.Entity
             _points.AddRange(newPoints);
         }
 
+        public void AddPoint(LogicPoint point)
+        {
+            if (IsEnded) return;
+            _points.Add(point);
+        }
+
         public void EndStroke()
         {
             IsEnded = true;
