@@ -42,14 +42,18 @@ namespace Features.Drawing.App
         private InputStateManager _inputState;
         private DrawingSessionContext _sessionContext = new DrawingSessionContext();
         
+        // Input Processing (Extracted)
+        private Features.Drawing.Service.Input.StrokeInputProcessor _inputProcessor = new Features.Drawing.Service.Input.StrokeInputProcessor();
+        private Features.Drawing.Service.Network.RemoteStrokeHandler _remoteHandler;
+
         // Public Accessors for UI/Preview
         public bool IsEraser => _inputState?.IsEraser ?? false;
         public float CurrentSize => _inputState?.CurrentSize ?? 10f;
         public BrushStrategy EraserStrategy => _eraserStrategy;
 
-        // Optimization State
-        private LogicPoint _lastAddedPoint;
-        private Vector2 _currentStabilizedPos;
+        // Optimization State - Moved to StrokeInputProcessor
+        // private LogicPoint _lastAddedPoint;
+        // private Vector2 _currentStabilizedPos;
         // _nextSequenceId moved to DrawingSessionContext
 
         
@@ -168,6 +172,15 @@ namespace Features.Drawing.App
 
             // Init State Manager
             _inputState = new InputStateManager(_renderer, _eraserStrategy);
+
+            // Init Remote Handler
+            _remoteHandler = new Features.Drawing.Service.Network.RemoteStrokeHandler(
+                _renderer, 
+                _historyManager, 
+                _collisionService, 
+                this, 
+                _eraserStrategy
+            );
 
             // 3. Setup Resolution Handling
             if (_renderer is Features.Drawing.Presentation.CanvasRenderer concreteRenderer)
@@ -298,9 +311,8 @@ namespace Features.Drawing.App
                 _networkService.OnLocalStrokeStarted(id, brushId, _inputState.CurrentColor, _inputState.CurrentSize, _inputState.IsEraser);
             }
 
-            _lastAddedPoint = point;
+            _inputProcessor.Reset(point);
             AddPoint(point);
-            _currentStabilizedPos = point.ToNormalized();
 
             // Network Sync: Send the first point immediately
             // This is critical because BeginStrokePacket does not contain coordinates.
@@ -312,69 +324,18 @@ namespace Features.Drawing.App
 
         public void MoveStroke(LogicPoint point)
         {
-            // Optimization: Eraser Deduplication (User Requirement)
-            // "Eraser repeated drawing positions can be not recorded"
-            // Filter out points that are too close to the last added point to avoid redundant collision checks and history data.
-            if (_inputState.IsEraser)
-            {
-                // LogicPoint uses 0-65535. 
-                // Convert size (pixels) to approximate logical units.
-                // Assuming 1920px screen ~ 65535 units => factor ~ 34.
-                // Threshold: 10% of brush size.
-                // If brush is 20px, threshold is 2px ~ 70 units.
-                float scale = _logicToWorldRatio;
-                float threshold = (_inputState.CurrentSize * 0.1f) * scale;
-                
-                // Use squared distance for perf
-                float sqrDist = LogicPoint.SqrDistance(_lastAddedPoint, point);
-                if (sqrDist < threshold * threshold)
-                {
-                    return; // Skip this point
-                }
-            }
+            var result = _inputProcessor.Process(
+                point,
+                _inputState.IsEraser,
+                _inputState.CurrentSize,
+                _inputState.CurrentStrategy,
+                _logicToWorldRatio
+            );
 
-            LogicPoint pointToAdd = point;
-            
-            // Apply Stabilization (Anti-Shake)
-            if (!_inputState.IsEraser && _inputState.CurrentStrategy != null && _inputState.CurrentStrategy.StabilizationFactor > 0.001f)
-            {
-                Vector2 target = point.ToNormalized();
-                float dist = Vector2.Distance(target, _currentStabilizedPos);
-                
-                const float MIN_SPEED_THRESHOLD = 0.002f; 
-                const float MAX_SPEED_THRESHOLD = 0.05f;
+            if (!result.ShouldAdd) return;
 
-                float speedT = Mathf.InverseLerp(MIN_SPEED_THRESHOLD, MAX_SPEED_THRESHOLD, dist);
-                float dynamicFactor = Mathf.Lerp(_inputState.CurrentStrategy.StabilizationFactor, _inputState.CurrentStrategy.StabilizationFactor * 0.2f, speedT);
-                float pressure = Mathf.Clamp01(point.GetNormalizedPressure());
-                float pressureWeight = Mathf.Lerp(1.1f, 0.7f, pressure);
-                dynamicFactor *= pressureWeight;
-                
-                float t = Mathf.Clamp01(1.0f - dynamicFactor);
-                _currentStabilizedPos = Vector2.Lerp(_currentStabilizedPos, target, t);
-                
-                pointToAdd = LogicPoint.FromNormalized(_currentStabilizedPos, point.GetNormalizedPressure());
-            }
-            else
-            {
-                _currentStabilizedPos = point.ToNormalized();
-            }
-
-            if (!_inputState.IsEraser)
-            {
-                float spacingRatio = _inputState.CurrentStrategy != null ? _inputState.CurrentStrategy.SpacingRatio : 0.15f;
-                float minPixelSpacing = _inputState.CurrentSize * spacingRatio;
-                if (minPixelSpacing < 1f) minPixelSpacing = 1f;
-                float minLogical = minPixelSpacing * _logicToWorldRatio;
-                float sqrDist = LogicPoint.SqrDistance(_lastAddedPoint, pointToAdd);
-                if (sqrDist < minLogical * minLogical)
-                {
-                    return;
-                }
-            }
-
+            LogicPoint pointToAdd = result.PointToAdd;
             AddPoint(pointToAdd);
-            _lastAddedPoint = pointToAdd;
             
             // Log every 10th point or if distance is large? Just log count.
             if (_enableDiagnostics && _sessionContext.RawPoints.Count % 10 == 0)
@@ -517,13 +478,11 @@ namespace Features.Drawing.App
             _sessionContext.StartStroke(id, brushId, colorInt, size);
 
             // 4. Replay existing points
-            _currentStabilizedPos = Vector2.zero; // Reset stabilization
             
             if (existingPoints != null && existingPoints.Count > 0)
             {
                 // Setup stabilization state from last point
-                _currentStabilizedPos = existingPoints[existingPoints.Count - 1].ToNormalized();
-                _lastAddedPoint = existingPoints[existingPoints.Count - 1];
+                _inputProcessor.Reset(existingPoints[existingPoints.Count - 1]);
 
                 // OPTIMIZATION: Batch Add Points
                 // Instead of calling AddPoint one by one (which triggers renderer frequently),
@@ -680,124 +639,12 @@ namespace Features.Drawing.App
 
         public void CommitRemoteStroke(StrokeEntity stroke)
         {
-            if (stroke == null || stroke.Points.Count == 0) return;
-
-            // 1. Setup Renderer State for this stroke
-            bool isEraser = stroke.BrushId == DrawingConstants.ERASER_BRUSH_ID;
-            
-            // Note: We are modifying the renderer state directly here.
-            // This is safe because this runs on the main thread, but we must ensure
-            // we restore it or that the next StartStroke resets it correctly (which it does).
-            
-            BrushStrategy strategy = null;
-            if (isEraser)
-            {
-                strategy = _eraserStrategy;
-                if (_renderer != null)
-                {
-                    if (strategy != null) _renderer.ConfigureBrush(strategy);
-                    _renderer.SetEraser(true);
-                    _renderer.SetBrushSize(stroke.Size);
-                }
-            }
-            else
-            {
-                // Lookup strategy by ID
-                strategy = GetBrushStrategy(stroke.BrushId);
-                
-                if (_renderer != null)
-                {
-                    // Use runtime texture if it's the current local user (not ideal logic for remote, but best guess)
-                    // For true remote, we should sync the texture ID or use the strategy's default.
-                    // Assuming strategy default for remote strokes.
-                    Texture2D tex = strategy?.MainTexture;
-                    if (strategy != null) _renderer.ConfigureBrush(strategy, tex);
-                    
-                    _renderer.SetEraser(false);
-                    // Convert uint color back to Color
-                    Color c = UIntToColor(stroke.ColorRGBA);
-                    _renderer.SetBrushColor(c);
-                    _renderer.SetBrushSize(stroke.Size);
-                }
-            }
-
-            // 2. Draw Full Stroke (Smoothly)
-            // We use the same smoothing logic as local strokes
-            if (_renderer != null)
-            {
-                // Create temp command to execute drawing logic?
-                // Or just draw directly.
-                // Let's draw directly using the smoothing service helper
-                
-                // We can reuse DrawStrokeCommand logic but we don't want to create a command instance just to execute it?
-                // Actually creating a command is exactly what we want, because we want to add it to history!
-            }
-
-            // 3. Create Command & Add to History
-            var cmd = new DrawStrokeCommand(
-                stroke.Id.ToString(),
-                stroke.SequenceId,
-                new List<LogicPoint>(stroke.Points),
-                strategy,
-                _inputState.CurrentRuntimeTexture, // Might be wrong if remote user used different texture
-                UIntToColor(stroke.ColorRGBA),
-                stroke.Size,
-                isEraser
-            );
-            
-            // Execute (Draws it)
-            cmd.Execute(_renderer, _historyManager.SmoothingService);
-            
-            // Add to history
-            _historyManager.AddCommand(cmd);
-            
-            // Spatial Index
-            _collisionService.Insert(stroke);
-            
-            // Diagnostics
-            if (_logger != null && _enableDiagnostics) // Only log if explicitly enabled
-            {
-                 // _logger.Info("RemoteStrokeCommitted", Common.Diagnostics.TraceContext.New(), new Dictionary<string, object> { { "id", stroke.Id }, { "points", stroke.Points.Count } });
-            }
-        }
-        
-        private Color UIntToColor(uint color)
-        {
-            byte r = (byte)((color >> 24) & 0xFF);
-            byte g = (byte)((color >> 16) & 0xFF);
-            byte b = (byte)((color >> 8) & 0xFF);
-            byte a = (byte)(color & 0xFF);
-            return new Color32(r, g, b, a);
+            _remoteHandler?.CommitRemoteStroke(stroke);
         }
 
         public void ReceiveRemoteStroke(StrokeEntity stroke)
         {
-            if (stroke == null) return;
-
-            bool isEraser = stroke.BrushId == DrawingConstants.ERASER_BRUSH_ID;
-            
-            if (isEraser)
-            {
-                _renderer.SetEraser(true);
-                if (_eraserStrategy != null) _renderer.ConfigureBrush(_eraserStrategy);
-            }
-            else
-            {
-                _renderer.SetEraser(false);
-                var strategy = GetBrushStrategy(stroke.BrushId);
-                if (strategy != null) _renderer.ConfigureBrush(strategy, strategy.MainTexture);
-            }
-            
-            _renderer.SetBrushSize(stroke.Size);
-            
-            // Convert UInt color back to Color
-            // ... (Omitted for brevity)
-
-            // Draw points (Smoothing logic needed here too ideally)
-            // For now just draw raw
-            _renderer.DrawPoints(stroke.Points);
-            
-            _renderer.EndStroke();
+            _remoteHandler?.ReceiveRemoteStroke(stroke);
         }
         public BrushStrategy GetBrushStrategy(ushort id)
         {
