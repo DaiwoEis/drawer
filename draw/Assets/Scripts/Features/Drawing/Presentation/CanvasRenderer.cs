@@ -57,27 +57,35 @@ namespace Features.Drawing.Presentation
             _smoothingService = service;
         }
 
+        private const int MIN_POINTS_FOR_SMOOTHING = 4;
+
         public void DrawStroke(List<LogicPoint> points, bool isEraser)
         {
+            if (points == null || points.Count == 0) return;
+
             if (_smoothingService == null)
             {
                 DrawPoints(points);
                 return;
             }
 
-            StrokeDrawHelper.DrawFullStroke(
-                new StrokeDrawContext(this, _smoothingService),
-                points,
-                isEraser
-            );
+            // Handle short strokes (dots) that wouldn't trigger the smoothing window
+            if (!isEraser && points.Count < MIN_POINTS_FOR_SMOOTHING)
+            {
+                DrawPoints(points);
+                return;
+            }
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                DrawIncremental(points, i, isEraser);
+            }
         }
 
         public void DrawIncremental(List<LogicPoint> points, int index, bool isEraser)
         {
             if (_smoothingService == null)
             {
-                // Fallback: just draw the point at index if possible, or do nothing?
-                // DrawPoints takes IEnumerable, we can wrap it.
                 if (index >= 0 && index < points.Count)
                 {
                     DrawPoints(new LogicPoint[] { points[index] });
@@ -85,12 +93,26 @@ namespace Features.Drawing.Presentation
                 return;
             }
 
-            StrokeDrawHelper.DrawIncremental(
-                new StrokeDrawContext(this, _smoothingService),
-                points,
-                index,
-                isEraser
-            );
+            int count = index + 1;
+            if (count >= MIN_POINTS_FOR_SMOOTHING)
+            {
+                var input = _smoothingService.ControlPoints;
+                input.Clear();
+                input.Add(points[index - 3]);
+                input.Add(points[index - 2]);
+                input.Add(points[index - 1]);
+                input.Add(points[index]);
+
+                _smoothingService.SmoothPoints();
+                DrawPoints(_smoothingService.OutputBuffer);
+            }
+            else if (isEraser)
+            {
+                var buffer = SharedDrawBuffers.SinglePointBuffer;
+                buffer.Clear();
+                buffer.Add(points[index]);
+                DrawPoints(buffer);
+            }
         }
 
         // Base class handles: _brushMaterial, _cmd, _quadMesh, _props
